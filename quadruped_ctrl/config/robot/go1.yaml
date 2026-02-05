@@ -1,0 +1,16 @@
+robot_name: "go1"
+
+physics:
+  mass: 12.019
+  # [Ixx, Ixy, Ixz, Iyx, Iyy, Iyz, Izx, Izy, Izz]
+  inertia: [1.5846e-01, 1.2166e-04, -1.5544e-02,
+            1.2166e-04, 4.6864e-01, -3.1200e-05,
+            -1.5544e-02, -3.1200e-05, 5.2447e-01]
+
+geometry:
+  hip_height: 0.26
+
+swing_control:
+  kp: 500
+  kd: 10
+  step_height: 0.05

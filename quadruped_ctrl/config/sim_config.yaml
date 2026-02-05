@@ -1,0 +1,45 @@
+physics:
+  dt: 0.002                # 500Hz
+  mpc_frequency: 10        # 50Hz
+  scene: "flat"            # flat, random_boxes, perlin
+  gravity: 9.81
+
+optimize:
+  use_feedback_linearization: false
+  use_friction_compensation: false
+  use_foothold_optimization: false
+
+gait:
+  active: "trot"
+  horizon: 12
+
+  gaits:
+    trot:
+      type: 1 
+      duty_factor: 0.6
+      step_freq: 1.4
+      phase_offsets: [0.5, 1.0, 1.0, 0.5] # FL, FR, RL, RR
+    
+    pace:
+      type: 3 
+      duty_factor: 0.7
+      step_freq: 1.4
+      phase_offsets: [0.8, 0.3, 0.8, 0.3]
+    
+    bounding:
+      type: 4 
+      duty_factor: 0.65
+      step_freq: 1.8
+      phase_offsets: [0.5, 0.5, 0.0, 0.0]
+
+    crawl:
+      type: 2 
+      duty_factor: 0.8
+      step_freq: 0.5
+      phase_offsets: [0.0, 0.5, 0.75, 0.25]
+
+    full_stance:
+      type: 5 
+      duty_factor: 1.0
+      step_freq: 0.0
+      phase_offsets: [0.0, 0.0, 0.0, 0.0]
