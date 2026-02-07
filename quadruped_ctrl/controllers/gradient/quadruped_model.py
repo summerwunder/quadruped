@@ -6,8 +6,8 @@ from acados_template import AcadosModel
 
 class QuadrupedModel:
     """四足机器人动力学模型，基于CasADi实现符号计算"""
-    def __init__(self):
-        sim_config = ConfigLoader.load_sim_config('sim_config.yaml')
+    def __init__(self, sim_config_path: str = "sim_config.yaml"):
+        sim_config = ConfigLoader.load_sim_config(sim_config_path)
         self.gravity = sim_config.get('physics', {}).get('gravity', 9.81)
         self.foot_optimization = sim_config.get('optimize', {}).get('use_foothold_optimization', False)
 

@@ -3,15 +3,22 @@ physics:
   mpc_frequency: 10        # 50Hz
   scene: "flat"            # flat, random_boxes, perlin
   gravity: 9.81
+  mu: 0.5
+  
 
 optimize:
   use_feedback_linearization: false
   use_friction_compensation: false
   use_foothold_optimization: false
 
+  use_foothold_constraint: true
+  use_static_stability: false
+  use_zmp_stability: true
+  grf_max: 150.0
+  grf_min: 0.0
+
 gait:
   active: "trot"
-  horizon: 12
 
   gaits:
     trot:

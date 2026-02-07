@@ -230,7 +230,7 @@ class RobotConfig:
     """机器人配置参数"""
     
     robot_name: str                            # 机器人名称
-    total_mass: float = 10                     # 总质量 [kg]
+    mass: float = 10                           # 总质量 [kg]
     n_legs: int = 4                            # 腿数
     dofs_per_leg: List[int] = field(default_factory=lambda: [3, 3, 3, 3])  # 每条腿的自由度
     

@@ -78,7 +78,7 @@ class ConfigLoader:
         # 创建配置对象
         config = RobotConfig(
             robot_name=robot_name,
-            total_mass=mass,
+            mass=mass,
             n_legs=4,
             dofs_per_leg=[3, 3, 3, 3],
             gravity=gravity,
@@ -147,3 +147,46 @@ class ConfigLoader:
             raise ValueError(f"Empty sim config file: {config_path}")
         
         return sim_config
+
+    @staticmethod
+    def load_mpc_config(config_path: str = 'mpc_config.yaml') -> Dict[str, Any]:
+        """加载 MPC 配置文件（权重、代价矩阵、预测步长等）
+        Args:
+            config_path: MPC 配置文件路径（相对于 config 目录）
+        Returns:
+            字典形式的 MPC 配置，内部数组会被转换为 numpy.ndarray
+        """
+        if not os.path.isabs(config_path):
+            module_dir = os.path.dirname(__file__)
+            config_path = os.path.join(module_dir, '..', 'config', config_path)
+
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"MPC config file not found: {config_path}")
+
+        with open(config_path, 'r') as f:
+            mpc_config = yaml.safe_load(f)
+
+        if mpc_config is None:
+            raise ValueError(f"Empty mpc config file: {config_path}")
+
+        # Convert lists to numpy arrays where appropriate
+        weights = mpc_config.get('weights', {})
+        converted_weights = {}
+        for k, v in weights.items():
+            try:
+                converted_weights[k] = np.array(v, dtype=np.float64)
+            except Exception:
+                converted_weights[k] = v
+
+        r_vals = mpc_config.get('R', {})
+        converted_r = {}
+        for k, v in r_vals.items():
+            try:
+                converted_r[k] = np.array(v, dtype=np.float64)
+            except Exception:
+                converted_r[k] = v
+
+        mpc_config['weights'] = converted_weights
+        mpc_config['R'] = converted_r
+
+        return mpc_config
