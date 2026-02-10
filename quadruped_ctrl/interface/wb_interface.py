@@ -65,7 +65,6 @@ class WBInterface:
 
         # 2. 计算 PD 虚拟加速度/力 (Des_acc + Kp*e + Kd*edot)
         # 这既是基础笛卡尔空间力，也是反馈线性化的核心项
-
         q_idx = leg.qvel_idxs
         _J = leg.jac_pos_base[:, q_idx]
         _J_dot = leg.jac_pos_dot_base[:, q_idx]

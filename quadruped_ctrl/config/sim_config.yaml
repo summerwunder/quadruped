@@ -13,9 +13,10 @@ optimize:
 
   use_foothold_constraint: true
   use_static_stability: false
-  use_zmp_stability: true
-  grf_max: 150.0
-  grf_min: 0.0
+  use_zmp_stability: false
+
+  use_warm_start: false
+
 
 gait:
   active: "trot"
@@ -25,24 +26,27 @@ gait:
       type: 1 
       duty_factor: 0.6
       step_freq: 1.4
+      margin: 0.04
       phase_offsets: [0.5, 1.0, 1.0, 0.5] # FL, FR, RL, RR
     
     pace:
       type: 3 
       duty_factor: 0.7
       step_freq: 1.4
+      margin: 0.1
       phase_offsets: [0.8, 0.3, 0.8, 0.3]
     
-    bounding:
-      type: 4 
-      duty_factor: 0.65
-      step_freq: 1.8
-      phase_offsets: [0.5, 0.5, 0.0, 0.0]
+    # bounding:
+    #   type: 4 
+    #   duty_factor: 0.65
+    #   step_freq: 1.8
+    #   phase_offsets: [0.5, 0.5, 0.0, 0.0]
 
     crawl:
       type: 2 
       duty_factor: 0.8
       step_freq: 0.5
+      margin: 0.02
       phase_offsets: [0.0, 0.5, 0.75, 0.25]
 
     full_stance:

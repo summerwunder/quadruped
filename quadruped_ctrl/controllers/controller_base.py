@@ -6,13 +6,15 @@ class BaseController(ABC):
     """
     Standard interface for all quadruped controllers.
     """
-    def __init__(self, model):
-        self.model = model
+    def __init__(self, env, **kwargs):
+        self.env = env
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     @abstractmethod
-    def get_action(self, state: QuadrupedState):
+    def get_action(self, **kwargs):
         """
-        Input: QuadrupedState (The current full state of the robot)
+        Input: 
         Output: numpy.ndarray (The joint torques to be applied to actuators)
         """
         pass

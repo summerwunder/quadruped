@@ -20,7 +20,8 @@ class QuadrupedEnv(gym.Env):
     """四足机器人环境，继承 gym.Env"""
     metadata = {'render.modes': ['human']}
     
-    def __init__(self, robot_config: Optional[RobotConfig] = None, model_path: Optional[str] = None,
+    def __init__(self, robot_config: Optional[str] = None, 
+                 model_path: Optional[str] = None,
                  sim_config_path: Optional[str] = None):
         """初始化环境
         Args:
@@ -31,11 +32,12 @@ class QuadrupedEnv(gym.Env):
         super().__init__()
         
         if robot_config is None:
-            self.robot_config = ConfigLoader.load_builtin_config('go1')
+            self.robot = ConfigLoader.load_builtin_config('go1')
         else:
-            self.robot_config = robot_config
+            self.robot = ConfigLoader.load_robot_config(robot_config)
         if sim_config_path is None:
             sim_config_path = 'sim_config.yaml'
+        self.sim_config_path = sim_config_path
         self.sim_config = ConfigLoader.load_sim_config(sim_config_path)     
         if model_path is None:
             module_dir = os.path.dirname(__file__)
@@ -53,7 +55,7 @@ class QuadrupedEnv(gym.Env):
         
         self._setup_joint_mapping()
         
-        n_dof = self.robot_config.get_total_dof()  # 12 (3 DOF per leg * 4 legs) 
+        n_dof = self.robot.get_total_dof()  # 12 (3 DOF per leg * 4 legs) 
         # 观测空间：基座(13) + 每条腿关节状态(3*3+3*3+3*3=27) = 40维
         # [pos(3), quat(4), lin_vel(3), ang_vel(3), qpos(12), qvel(12)]
         obs_dim = 3 + 4 + 3 + 3 + 12 + 12
@@ -300,6 +302,15 @@ class QuadrupedEnv(gym.Env):
             geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
             
             self.foot_geom_ids[leg_name] = geom_id
+
+        # 髋关节 body id 映射（用于获取 hip 在世界坐标系下的位置）
+        self.hip_body_ids = {}
+        for leg_name in ['FL', 'FR', 'RL', 'RR']:
+            hip_body_name = f"{leg_name}_hip"
+            hip_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, hip_body_name)
+            if hip_body_id == -1:
+                hip_body_id = None
+            self.hip_body_ids[leg_name] = hip_body_id
         
         # 基座body索引
         self.base_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'trunk')
@@ -370,7 +381,20 @@ class QuadrupedEnv(gym.Env):
             # 转换到基座坐标系
             base_pos = self.state.base.pos
             base_rot = self.state.base.rot_mat
+            leg.foot_pos_centered = leg.foot_pos_world - base_pos
             leg.foot_pos = base_rot.T @ (leg.foot_pos_world - base_pos)
+
+            # 髋关节位置：优先使用 hip_body_ids 获取世界坐标位置，并转换到基座坐标系
+            hip_body_id = None
+            if hasattr(self, 'hip_body_ids'):
+                hip_body_id = self.hip_body_ids.get(leg_name, None)
+
+            if hip_body_id is not None:
+                leg.hip_pos_world = self.data.xpos[hip_body_id].copy()
+                leg.hip_pos = base_rot.T @ (leg.hip_pos_world - base_pos)
+            else:
+                print(f"Warning: hip body for leg {leg_name} not found, setting hip position to zero")
+                raise ValueError(f"Hip body for leg {leg_name} not found in model")
             
             # 计算 Jacobian 矩阵
             self._compute_leg_jacobian(leg_name)

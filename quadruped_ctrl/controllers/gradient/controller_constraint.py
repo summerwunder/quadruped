@@ -1,6 +1,7 @@
 import numpy as np
 import casadi as cs
-from quadruped_ctrl.quadruped_model import QuadrupedModel
+from quadruped_ctrl.controllers.gradient.quadruped_model import QuadrupedModel
+from quadruped_ctrl.datatypes import QuadrupedState, ReferenceState
 class QuadrupedConstraints:
     def __init__(self, model:QuadrupedModel, use_static_stability: bool, acados_infty: float):
         self.model = model
@@ -101,19 +102,19 @@ class QuadrupedConstraints:
         R_wb[1,1] = cs.cos(yaw)
         
         foot_position_FL = cs.SX.zeros(3,1)
-        foot_position_FL[0:2] = R_wb @ cs.vertcat(self.state[12:14]- base_pos[0:2])
+        foot_position_FL[0:2] = R_wb @ cs.vertcat(self.model.state[12:14] - base_pos[0:2])
         foot_position_FL[2] = self.model.state[14]
         
         foot_position_FR = cs.SX.zeros(3,1)
-        foot_position_FR[0:2] = R_wb @ cs.vertcat(self.state[15:17]- base_pos[0:2])
+        foot_position_FR[0:2] = R_wb @ cs.vertcat(self.model.state[15:17] - base_pos[0:2])
         foot_position_FR[2] = self.model.state[17]
         
         foot_position_RL = cs.SX.zeros(3,1)
-        foot_position_RL[0:2] = R_wb @ cs.vertcat(self.state[18:20]- base_pos[0:2])
+        foot_position_RL[0:2] = R_wb @ cs.vertcat(self.model.state[18:20] - base_pos[0:2])
         foot_position_RL[2] = self.model.state[20]
         
         foot_position_RR = cs.SX.zeros(3,1)
-        foot_position_RR[0:2] = R_wb @ cs.vertcat(self.state[21:23]- base_pos[0:2])
+        foot_position_RR[0:2] = R_wb @ cs.vertcat(self.model.state[21:23] - base_pos[0:2])
         foot_position_RR[2] = self.model.state[23]
         Jbu = cs.vertcat(foot_position_FL, foot_position_FR, foot_position_RL, foot_position_RR)
         
@@ -160,4 +161,6 @@ class QuadrupedConstraints:
         ub[10:15] = ub[0:5]
         ub[15:20] = ub[0:5]
         return Jbu, lb, ub
+    
+
         

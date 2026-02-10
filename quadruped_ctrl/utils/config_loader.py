@@ -73,7 +73,7 @@ class ConfigLoader:
         swing_control = data.get('swing_control', {})
         swing_kp = float(swing_control.get('kp', 60.0))
         swing_kd = float(swing_control.get('kd', 10.0))
-        step_height = float(swing_control.get('step_height', 0.05))
+        step_height = hip_height * 0.2 
         
         # 创建配置对象
         config = RobotConfig(
@@ -147,6 +147,55 @@ class ConfigLoader:
             raise ValueError(f"Empty sim config file: {config_path}")
         
         return sim_config
+
+    @staticmethod
+    def load_gait_params(config_path: str = 'sim_config.yaml', gait_name: Optional[str] = None) -> Dict[str, Any]:
+        """加载 gait 配置并返回指定 gait 或所有 gait 的参数。
+
+        默认返回一个字典，键为 gait 名称，值为参数字典：
+            { '<gait_name>': { 'type': int, 'duty_factor': float, 'step_freq': float, 'phase_offsets': np.ndarray }, ... }
+
+        Args:
+            config_path: 仿真配置文件路径（相对于 config 目录）
+            gait_name: 如果指定，返回该 gait 的参数；否则返回所有 gait 的参数（不包含 `active` 字段）
+
+        Returns:
+            gait 字典或单个 gait 参数字典。
+        """
+        sim_cfg = ConfigLoader.load_sim_config(config_path)
+        gait_section = sim_cfg.get('gait', {}) if sim_cfg is not None else {}
+
+        gaits = gait_section.get('gaits', {})
+
+        parsed_gaits = {}
+        for name, params in gaits.items():
+            if params is None:
+                continue
+            p_type = params.get('type', None)
+            duty = float(params.get('duty_factor', 1.0))
+            step_freq = float(params.get('step_freq', 0.0))
+            phase = params.get('phase_offsets', None)
+            margin = params.get('margin', None)
+            try:
+                phase_arr = np.array(phase, dtype=np.float64) if phase is not None else None
+            except Exception:
+                phase_arr = None
+
+            parsed_gaits[name] = {
+                'type': int(p_type) if p_type is not None else None,
+                'duty_factor': duty,
+                'step_freq': step_freq,
+                'phase_offsets': phase_arr,
+                'margin': float(margin) if margin is not None else None,
+            }
+
+        if gait_name is None:
+            return parsed_gaits
+
+        if gait_name not in parsed_gaits:
+            raise KeyError(f"Gait '{gait_name}' not found in sim_config: {list(parsed_gaits.keys())}")
+
+        return parsed_gaits[gait_name]
 
     @staticmethod
     def load_mpc_config(config_path: str = 'mpc_config.yaml') -> Dict[str, Any]:

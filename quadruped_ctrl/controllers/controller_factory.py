@@ -1,6 +1,6 @@
 import os
 import sys
-from quadruped_ctrl.controllers.pd.pd_controller import PDController
+
 
 
 class ControllerFactory:
@@ -8,16 +8,18 @@ class ControllerFactory:
     Factory class to select and initialize different controllers.
     """
     @staticmethod
-    def create_controller(name, model, **kwargs):
+    def create_controller(name, env, **kwargs):
         name = name.lower()
         
         if name == "pd":
+            from quadruped_ctrl.controllers.pd.pd_controller import PDController
             print("[Factory] Creating PD Controller...")
-            return PDController(model, **kwargs)
+            return PDController(env, **kwargs)
         
         elif name == "mpc_gradient":
+            from quadruped_ctrl.controllers.gradient.controller_handler import Quadruped_NMPC_Handler
             print("[Factory] Creating Gradient MPC Controller...")
-            pass 
+            return Quadruped_NMPC_Handler(env, **kwargs)
             
         else:
             raise ValueError(f"Unknown controller type: {name}")

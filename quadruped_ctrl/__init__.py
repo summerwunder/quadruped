@@ -15,7 +15,13 @@ from .datatypes import (
 
 from .utils.config_loader import ConfigLoader
 
-from .quadruped_env import QuadrupedEnv
+# Delay or make optional the heavy simulator import so the package can be
+# imported on systems without MuJoCo installed. Consumers that need the
+# environment should import it explicitly.
+try:
+    from .quadruped_env import QuadrupedEnv
+except Exception:
+    QuadrupedEnv = None
 
 __all__ = [
     'LegJointMap',
@@ -24,5 +30,6 @@ __all__ = [
     'Trajectory',
     'RobotConfig',
     'ConfigLoader',
+    # QuadrupedEnv may be None if MuJoCo is unavailable; import explicitly
     'QuadrupedEnv',
 ]

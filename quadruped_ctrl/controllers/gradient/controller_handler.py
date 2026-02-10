@@ -4,33 +4,38 @@ from quadruped_ctrl.quadruped_env import QuadrupedEnv
 import numpy as np
 import casadi as cs
 from quadruped_ctrl.utils.config_loader import ConfigLoader
+from quadruped_ctrl.controllers.controller_base import BaseController
+from quadruped_ctrl.datatypes import QuadrupedState, ReferenceState
 from quadruped_ctrl.controllers.gradient.controller_constraint import QuadrupedConstraints
 import pathlib
 import scipy
+import os 
 import copy
 
-class Quadruped_NMPC_Handler:
+ACADOS_INFTY = 1e6
+class Quadruped_NMPC_Handler(BaseController):
     def __init__(self, env: QuadrupedEnv, 
-                 robot_config_path: str = "go1.yaml",
-                 sim_config_path: str = "sim.yaml",
                  mpc_config_path: str = "mpc_config.yaml"):
         self.env = env
-        self.robot = ConfigLoader.load_robot_config(robot_config_path)
-        self.sim_config = ConfigLoader.load_sim_config(sim_config_path)
+        self.robot = env.robot
+        self.sim_config = env.sim_config
         # load MPC specific config (weights, R, horizon 等)
         self.mpc_config = ConfigLoader.load_mpc_config(mpc_config_path)
+        self.verbose = self.mpc_config.get("verbose", False)
 
-        self.use_foothold_constraint = self.sim_config.get('use_foothold_constraint')
-        self.use_static_stability = self.sim_config.get('use_static_stability')
-        self.use_zmp_stability = self.sim_config.get('use_zmp_stability')
+        self.sim_optimize_config = self.sim_config.get("optimize", {})
+        self.use_foothold_constraint = self.sim_optimize_config.get('use_foothold_constraint')
+        self.use_static_stability = self.sim_optimize_config.get('use_static_stability')
+        self.use_zmp_stability = self.sim_optimize_config.get('use_zmp_stability')
+        self.use_warm_start = self.sim_optimize_config.get('use_warm_start', False)
         self.use_stability_constraint = self.use_static_stability or self.use_zmp_stability
         
         # self.grf_max = self.sim_config.get('grf_max')
-        self.grf_max = self.robot.mass * \
-                self.sim_config.get('physics', {}).get('gravity')
-        self.grf_min = self.sim_config.get('grf_min')
+        self.gravity = self.sim_config.get('physics', {}).get('gravity', 9.81)
+        self.grf_max = self.robot.mass * self.gravity
+        self.grf_min = self.mpc_config.get('grf_min')
         # config parameters: 优先使用 mpc_config 中的 horizon，其次回退到 sim_config
-        self.horizon = int(self.mpc_config.get('horizon', self.sim_config.get('gait', {}).get('horizon', 12)))
+        self.horizon = int(self.mpc_config.get('horizon'))
         self.dt = float(self.sim_config.get('physics').get('dt', 0.002))
         self.T_horizon = self.horizon * self.dt
         # solver / optimization flags (from mpc_config)
@@ -41,36 +46,462 @@ class Quadruped_NMPC_Handler:
         self.as_rti_type = str(solver_conf.get('as_rti_type', 'AS-RTI-A'))
         self.solver_mode = str(solver_conf.get('solver_mode', 'balance'))
         self.qp_solver_iter_max = int(solver_conf.get('qp_solver_iter_max', 10))
+
+        self.use_integrators = bool(solver_conf.get('use_integrators', False))
+        self.alpha_integrator = float(solver_conf.get('alpha_integrator', 0.1))
+        self.integrator_clip = np.array(solver_conf.get('integrator_clip', [0.5, 0.2, 0.2, 0.0, 0.0, 1.0]))
+        self.integral_errors = np.zeros(6)
         # nonuniform discretization
         self.use_nonuniform_discretization = bool(solver_conf.get('use_nonuniform_discretization', False))
         self.dt_fine_grained = float(solver_conf.get('dt_fine_grained', self.dt))
         self.horizon_fine_grained = int(solver_conf.get('horizon_fine_grained', 0))
         
-        self.quadruped_model = QuadrupedModel(sim_config_path)
+        self.quadruped_model = QuadrupedModel(env.sim_config)
         acados_model = self.quadruped_model.export_quadruped_model()
         self.state_dim = acados_model.x.size()[0]
         self.control_dim = acados_model.u.size()[0]
-        
+        self.initial_base_pos = np.array([0.0, 0.0, 0.0])
         # OCP_Cost
         self.ocp = AcadosOcp()
-        self.setup_ocp_cost(acados_model)
-        # Constaints
-        quadruped_constraints = QuadrupedConstraints(
-            self.quadruped_model, self.use_static_stability, acados_infty=1e6
-        )
-        self.setup_ocp_constraints(quadruped_constraints)
-        # initialize parameters
-        self.setup_ocp_initialize_params()
-        # OCP option
-        self.setup_ocp_options()
-        
-        
-        current_dir = pathlib.Path(__file__).parent.resolve()
-        code_export_dir = current_dir / "acados_code_export"
-        self.ocp.code_export_directory = str(code_export_dir)
-        
-    def setup_ocp_cost(self, acados_model=None):
         self.ocp.model = acados_model
+        self._setup_ocp_cost()
+        # Constaints
+        self.quadruped_constraints = QuadrupedConstraints(
+            self.quadruped_model, self.use_static_stability, acados_infty=ACADOS_INFTY
+        )
+        self.constr_lh_friction = None
+        self.constr_uh_friction = None
+        self.upper_bound = None
+        self.lower_bound = None
+        self._setup_ocp_constraints(self.quadruped_constraints)
+        # initialize parameters
+        self._setup_ocp_initialize_params()
+        # OCP option
+        self._setup_ocp_options()
+        code_export_dir = pathlib.Path(__file__).parent.resolve() / "acados_solver"
+        self.ocp.code_export_directory = str(code_export_dir)
+        # ocp solver
+        self.acados_ocp_solver = AcadosOcpSolver(
+            self.ocp, 
+            json_file=str(code_export_dir / "acados_ocp.json")
+        )
+        for stage in range(self.horizon + 1):
+            self.acados_ocp_solver.set(stage, "x", np.zeros((self.state_dim,)))
+        for stage in range(self.horizon):
+            self.acados_ocp_solver.set(stage, "u", np.zeros((self.control_dim,)))
+
+
+    def compute_control(
+        self,
+        state: QuadrupedState,
+        reference: ReferenceState,
+        contact_sequence: np.ndarray,    
+        constraint= None,
+        external_wrenches=np.zeros((6,)),
+        inertia=np.zeros((9,)),
+        mass = 12,
+        mu = 0.5
+    ):
+        FL_contact_sequence = contact_sequence[0]
+        FR_contact_sequence = contact_sequence[1]
+        RL_contact_sequence = contact_sequence[2]
+        RR_contact_sequence = contact_sequence[3]
+        
+        
+        state, reference = self._perform_state_centering(state, reference)
+        for i in range(self.horizon):
+            yref = np.zeros((self.state_dim + self.control_dim,))
+            # state reference
+            yref[0:3] = reference.ref_position
+            yref[3:6] = reference.ref_linear_velocity
+            yref[6:9] = reference.ref_orientation
+            yref[9:12] = reference.ref_angular_velocity
+            yref[12:15] = reference.ref_foot_FL
+            yref[15:18] = reference.ref_foot_FR
+            yref[18:21] = reference.ref_foot_RL
+            yref[21:24] = reference.ref_foot_RR
+            
+            # TODO: ref_foot_*可以尝试传入数组，不然会迟钝
+            # It's simply mass*acc/number_of_legs_in_stance!! Force x and y are always 0
+            number_of_leg_in_stance = state.get_num_contact()
+            if number_of_leg_in_stance == 0:
+                reference_force_stance = 0
+            else:
+                reference_force_stance = self.grf_max / number_of_leg_in_stance
+            reference_force_FL = reference_force_stance * FL_contact_sequence[i]
+            reference_force_FR = reference_force_stance * FR_contact_sequence[i]
+            reference_force_RL = reference_force_stance * RL_contact_sequence[i]
+            reference_force_RR = reference_force_stance * RR_contact_sequence[i]
+            
+            # force z
+            yref[self.state_dim + 12 + 2] = reference_force_FL
+            yref[self.state_dim + 15 + 2] = reference_force_FR
+            yref[self.state_dim + 18 + 2] = reference_force_RL
+            yref[self.state_dim + 21 + 2] = reference_force_RR
+            
+            self.acados_ocp_solver.set(i, "yref", yref)
+        
+        # terminal cost reference
+        yref_N = np.zeros(shape = (self.state_dim,))
+        yref_N[0:3] = reference.ref_position
+        yref_N[3:6] = reference.ref_linear_velocity
+        yref_N[6:9] = reference.ref_orientation
+        yref_N[9:12] = reference.ref_angular_velocity
+        yref_N[12:15] = reference.ref_foot_FL
+        yref_N[15:18] = reference.ref_foot_FR
+        yref_N[18:21] = reference.ref_foot_RL
+        yref_N[21:24] = reference.ref_foot_RR
+        self.acados_ocp_solver.set(self.horizon, "yref", yref_N)
+        
+        # Fill param!!
+        base_yaw = state.base.euler[2]
+        stance_proximity_FL = np.zeros(self.horizon,)
+        stance_proximity_FR = np.zeros(self.horizon,)
+        stance_proximity_RL = np.zeros(self.horizon,)
+        stance_proximity_RR = np.zeros(self.horizon,)
+        
+        # TODO: disable 
+        for j in range(self.horizon):
+                #        if FL_contact_sequence[j] == 0:
+                # if (j + 1) < self.horizon:
+                #     if FL_contact_sequence[j + 1] == 1:
+                #         stance_proximity_FL[j] = 1 * 0
+                # if (j + 2) < self.horizon:
+                #     if FL_contact_sequence[j + 1] == 0 and FL_contact_sequence[j + 2] == 1:
+                #         stance_proximity_FL[j] = 1 * 0
+            if FL_contact_sequence[j] == 0:
+                if (j + 2) < self.horizon and (FL_contact_sequence[j + 1] == 1 or FL_contact_sequence[j + 2] == 1):
+                    stance_proximity_FL[j] = 1 * 0
+            if FR_contact_sequence[j] == 0:
+                if (j + 2) < self.horizon and (FR_contact_sequence[j + 1] == 1 or FR_contact_sequence[j + 2] == 1):
+                    stance_proximity_FR[j] = 1 * 0
+            if RL_contact_sequence[j] == 0:
+                if (j + 2) < self.horizon and (RL_contact_sequence[j + 1] == 1 or RL_contact_sequence[j + 2] == 1):
+                    stance_proximity_RL[j] = 1 * 0
+            if RR_contact_sequence[j] == 0:
+                if (j + 2) < self.horizon and (RR_contact_sequence[j + 1] == 1 or RR_contact_sequence[j + 2] == 1):
+                    stance_proximity_RR[j] = 1 * 0
+        
+        for j in range(self.horizon):
+            # TODO: 暂未设置外部扰相关参数，先设置为0
+            external_wrenches_estimated_param = np.zeros((6,))
+            param = np.array([
+                FL_contact_sequence[j],
+                FR_contact_sequence[j],
+                RL_contact_sequence[j],
+                RR_contact_sequence[j],
+                mu,
+                stance_proximity_FL[j],
+                stance_proximity_FR[j],
+                stance_proximity_RL[j],
+                stance_proximity_RR[j],
+                state.base.pos[0],
+                state.base.pos[1],
+                state.base.pos[2],
+                base_yaw,
+                external_wrenches_estimated_param[0],
+                external_wrenches_estimated_param[1],
+                external_wrenches_estimated_param[2],
+                external_wrenches_estimated_param[3],
+                external_wrenches_estimated_param[4],
+                external_wrenches_estimated_param[5],
+                inertia[0],
+                inertia[1],
+                inertia[2],
+                inertia[3],
+                inertia[4],
+                inertia[5],
+                inertia[6],
+                inertia[7],
+                inertia[8],
+                mass
+            ]                 
+            )
+            self.acados_ocp_solver.set(j, "p", copy.deepcopy(param))
+        
+        # Set initial state constraint. We teleported the robot foothold
+        # to the previous optimal foothold. This is done to avoid the optimization
+        # of a foothold that is not considered at all at touchdown! 
+        if FL_contact_sequence[0] == 0:
+            state.FL.foot_pos_centered = reference.ref_foot_FL
+
+        if FR_contact_sequence[0] == 0:
+            state.FR.foot_pos_centered = reference.ref_foot_FR
+
+        if RL_contact_sequence[0] == 0:
+            state.RL.foot_pos_centered = reference.ref_foot_RL
+
+        if RR_contact_sequence[0] == 0:
+            state.RR.foot_pos_centered = reference.ref_foot_RR
+            
+        if self.use_integrators:
+            self.integral_errors[0] += (state.base.pos[2] - reference.ref_position[2]) * self.alpha_integrator
+            self.integral_errors[1] += (state.base.lin_vel_world[0] - reference.ref_linear_velocity[0]) * self.alpha_integrator
+            self.integral_errors[2] += (state.base.lin_vel_world[1] - reference.ref_linear_velocity[1]) * self.alpha_integrator
+            self.integral_errors[3] += (state.base.lin_vel_world[2] - reference.ref_linear_velocity[2]) * self.alpha_integrator
+            self.integral_errors[4] += (state.base.euler[0] - reference.ref_orientation[0]) * self.alpha_integrator
+            self.integral_errors[5] += (state.base.euler[1] - reference.ref_orientation[1]) * self.alpha_integrator
+            
+        for i in range(len(self.integral_errors)):
+            self.integral_errors[i] = np.clip(self.integral_errors[i], -self.integrator_clip[i], self.integrator_clip[i])        
+        
+        state_acados = np.concatenate(
+            (
+                state.base.pos,
+                state.base.lin_vel_world,
+                state.base.euler,
+                state.base.ang_vel_world,
+                state.FL.foot_pos_centered,
+                state.FR.foot_pos_centered,
+                state.RL.foot_pos_centered,
+                state.RR.foot_pos_centered,
+                self.integral_errors
+            )
+        ).reshape((self.state_dim,1))
+        self.acados_ocp_solver.set(0, "lbx", state_acados)
+        self.acados_ocp_solver.set(0, "ubx", state_acados)
+        
+        # use warm start??
+        if self.use_warm_start:
+            self.warm_start(
+                state_acados=state_acados,
+                reference=reference,
+                FL_contact=FL_contact_sequence,
+                FR_contact=FR_contact_sequence,
+                RL_contact=RL_contact_sequence,
+                RR_contact=RR_contact_sequence
+            )
+        
+        # constraint stage
+        self.set_stage_constraint(
+            constraint=constraint,
+            state=state,
+            reference=reference,
+            contact_sequence_FL=FL_contact_sequence,
+            contact_sequence_FR=FR_contact_sequence,
+            contact_sequence_RL=RL_contact_sequence,
+            contact_sequence_RR=RR_contact_sequence
+        )
+        status = self.acados_ocp_solver.solve()
+        if self.verbose:
+            print("ocp time: ", self.acados_ocp_solver.get_stats('time_tot'))
+        
+        control = self.acados_ocp_solver.get(0, "u")
+        optimal_GRF = control[12:]
+        optimal_foothold = np.zeros((4, 3))
+        optimal_footholds_assigned = np.zeros((4,), dtype="bool")
+        
+    def warm_start(self,
+        state_acados,
+        reference,
+        FL_contact,
+        FR_contact,
+        RL_contact,
+        RR_contact):
+        for j in range(self.horizon):
+            # 1. 先拿到当前的猜测（Acados 默认会保留上一时刻的解）
+            x_guess = copy.deepcopy(self.acados_ocp_solver.get(j, "x"))
+
+            # 2. 更新足端位置猜测
+            # 逻辑：如果预测到第 j 步脚是支撑状态(1)，猜它在当前位置；
+            # 如果是摆动(0)，猜它去参考落脚点
+            x_guess[12:15] = state_acados[12:15] if FL_contact[j] == 1 else reference.ref_foot_FL
+            
+            # FR 腿 (15:18)
+            x_guess[15:18] = state_acados[15:18] if FR_contact[j] == 1 else reference.ref_foot_FR
+            
+            # RL 腿 (18:21)
+            x_guess[18:21] = state_acados[18:21] if RL_contact[j] == 1 else reference.ref_foot_RL
+            
+            # RR 腿 (21:24)
+            x_guess[21:24] = state_acados[21:24] if RR_contact[j] == 1 else reference.ref_foot_RR
+            
+            self.acados_ocp_solver.set(j, "x", x_guess)
+            
+
+        
+    # Method to perform the centering of the states and the reference around (0, 0, 0)    
+    def _perform_state_centering(self, state: QuadrupedState, reference: ReferenceState):
+        self.initial_base_pos = copy.deepcopy(state.base.pos)
+        reference = copy.deepcopy(reference)
+        state = copy.deepcopy(state)
+        
+        reference.ref_position = reference.ref_position - state.base.pos
+        reference.ref_foot_FL = reference.ref_foot_FL - state.base.pos
+        reference.ref_foot_FR = reference.ref_foot_FR - state.base.pos
+        reference.ref_foot_RL = reference.ref_foot_RL - state.base.pos
+        reference.ref_foot_RR = reference.ref_foot_RR - state.base.pos
+        
+        # TODO: 已经在环境层面进行状态中心化，其实不一定需要在这里重复进行状态中心化了
+        state.FL.foot_pos_centered = state.FL.foot_pos - state.base.pos
+        state.FR.foot_pos_centered = state.FR.foot_pos - state.base.pos
+        state.RL.foot_pos_centered = state.RL.foot_pos - state.base.pos
+        state.RR.foot_pos_centered = state.RR.foot_pos - state.base.pos
+        state.base.pos = np.array([0, 0, 0])
+        return state, reference
+    
+    def set_stage_constraint(self,
+                             constraint,   # None or np.ndarray givn by outside
+                             state: QuadrupedState,
+                             reference: ReferenceState,
+                             contact_sequence_FL,
+                             contact_sequence_FR,
+                             contact_sequence_RL,
+                             contact_sequence_RR):
+        yaw = state.base.euler[2]
+        base_xy = state.base.pos[:2]
+        R_wb = np.array([[np.cos(yaw), np.sin(yaw)], [-np.sin(yaw), np.cos(yaw)]])
+        
+        # 2. 定义局部辅助函数：快速生成一个“约束盒子”
+        def create_box(foot_pos, offset_xy, offset_z):
+            # 将世界坐标转为相对身体的局部坐标
+            rel_xy = R_wb @ (foot_pos[:2] - base_xy)
+            up = np.array([rel_xy[0] + offset_xy, rel_xy[1] + offset_xy, foot_pos[2] + offset_z])
+            low = np.array([rel_xy[0] - offset_xy, rel_xy[1] - offset_xy, foot_pos[2] - offset_z])
+            return up, low
+        
+        # 3. 计算【当前步】的支撑约束 (Stance Constraints)
+        # 支撑腿必须死死踩在原地，所以给的 offset 非常小 (0.005m)
+        up_st_FL, low_st_FL = create_box(state.FL.foot_pos_centered, 0.005, 0.002)
+        up_st_FR, low_st_FR = create_box(state.FR.foot_pos_centered, 0.005, 0.002)
+        up_st_RL, low_st_RL = create_box(state.RL.foot_pos_centered, 0.005, 0.002)
+        up_st_RR, low_st_RR = create_box(state.RR.foot_pos_centered, 0.005, 0.002)
+        
+        # 4. 计算【未来步】的落地约束 (Swing/Touchdown Constraints)
+        if constraint is None:
+            up_sw_FL, low_sw_FL = create_box(reference.ref_foot_FL[0], 0.15, 0.005)
+            up_sw_FR, low_sw_FR = create_box(reference.ref_foot_FR[0], 0.15, 0.005)
+            up_sw_RL, low_sw_RL = create_box(reference.ref_foot_RL[0], 0.15, 0.005)
+            up_sw_RR, low_sw_RR = create_box(reference.ref_foot_RR[0], 0.15, 0.005)
+        else:
+            # TODO: 解析 VFA 矩阵，为每一条腿设置视觉安全区
+            pass
+        
+        # 5. 核心循环：遍历整个预测时域 (Horizon)
+        # 根据步态序列 (Contact Sequence) 动态决定此时该用哪套“盒子”
+        for j in range(self.horizon):
+            # 获取摩擦力约束的基础值
+            ub_total = self.constr_uh_friction.copy()
+            lb_total = self.constr_lh_friction.copy()
+            # 逻辑：脚在地上(1)用 Stance 盒子；脚在空中(0)用 Swing 盒子
+            # 我们把四条腿的约束水平拼接起来
+            cur_up_FL, cur_low_FL = (up_st_FL, low_st_FL) if contact_sequence_FL[j] == 1 else (up_sw_FL, low_sw_FL)
+            cur_up_FR, cur_low_FR = (up_st_FR, low_st_FR) if contact_sequence_FR[j] == 1 else (up_sw_FR, low_sw_FR)
+            cur_up_RL, cur_low_RL = (up_st_RL, low_st_RL) if contact_sequence_RL[j] == 1 else (up_sw_RL, low_sw_RL)
+            cur_up_RR, cur_low_RR = (up_st_RR, low_st_RR) if contact_sequence_RR[j] == 1 else (up_sw_RR, low_sw_RR)
+
+            # 拼装成 Acados 需要的 12 维向量 (4条腿 * xyz)
+            foot_up = np.concatenate([cur_up_FL, cur_up_FR, cur_up_RL, cur_up_RR])
+            foot_low = np.concatenate([cur_low_FL, cur_low_FR, cur_low_RL, cur_low_RR])
+
+            # 6. 将足端位置约束叠加到非线性约束 (h) 中
+            # 最终的约束向量通常是 [摩擦力约束, 足端位置约束]
+            if self.use_foothold_constraint:
+                ub_total = np.concatenate([ub_total, foot_up])
+                lb_total = np.concatenate([lb_total, foot_low])
+            else:
+                ub_total = ub_total
+                lb_total = lb_total
+            
+            # 7. 插入稳定性约束 (Support Polygon / ZMP)
+            if self.use_stability_constraint:
+                # 初始化为全放开状态
+                ub_stab = np.array([ACADOS_INFTY] * 6)
+                lb_stab = np.array([-ACADOS_INFTY] * 6)
+
+                # --- 1. FULL STANCE (四腿支撑) ---
+                if(contact_sequence_FL[j] == 1 and contact_sequence_FR[j] == 1 and
+                   contact_sequence_RL[j] == 1 and contact_sequence_RR[j] == 1):
+                    margin = self.sim_config.get('gait', {}).get('full_stance', {}).get('margin', 0.05)
+                    # 此时四条边全部激活，重心收缩进矩形内部
+                    ub_stab[0], lb_stab[0] = -margin, -ACADOS_INFTY # 原本要求 <= 0
+                    ub_stab[1], lb_stab[1] = ACADOS_INFTY, 0 + margin  # 原本要求 >= 0
+                    ub_stab[2], lb_stab[2] = ACADOS_INFTY, 0 + margin  # 原本要求 >= 0
+                    ub_stab[3], lb_stab[3] = -margin, -ACADOS_INFTY # 原本要求 <= 0
+
+                # --- 2. TROT (对角步态) ---
+                elif(contact_sequence_FL[j] == contact_sequence_RR[j] and
+                     contact_sequence_FR[j] == contact_sequence_RL[j] and 
+                     contact_sequence_FL[j] != contact_sequence_FR[j]):
+                    margin = self.sim_config.get('gait', {}).get('trot', {}).get('margin', 0.04)
+                    if contact_sequence_FL[j] == 1: # FL-RR 支撑
+                        ub_stab[4], lb_stab[4] = margin, -margin # 对角线通常是对称约束
+                    else: # FR-RL 支撑
+                        ub_stab[5], lb_stab[5] = margin, -margin
+
+                # --- 3. PACE (同侧步态) ---
+                elif (contact_sequence_FL[j] == contact_sequence_RL[j] and
+                      contact_sequence_FR[j] == contact_sequence_RR[j]):
+                    margin = self.sim_config.get('gait', {}).get('pace', {}).get('margin', 0.03)
+                    if contact_sequence_FL[j] == 1: # 左侧支撑 (FL-RL)
+                        ub_stab[3], lb_stab[3] = -margin, -ACADOS_INFTY # 约束左边线 (Index 3 原本 <= 0)
+                    else: # 右侧支撑 (FR-RR)
+                        ub_stab[1], lb_stab[1] = ACADOS_INFTY, 0 + margin  # 约束右边线 (Index 1 原本 >= 0)
+
+                # --- 4. CRAWL (三腿支撑) ---
+                else:
+                    margin = self.sim_config.get('gait', {}).get('crawl', {}).get('margin', 0.05)
+                    if contact_sequence_FL[j] == 0: # FL 摆动，FR-RR-RL 支撑
+                        ub_stab[1], lb_stab[1] = ACADOS_INFTY, 0 + margin # 右边 (Index 1 >= 0)
+                        ub_stab[2], lb_stab[2] = ACADOS_INFTY, 0 + margin # 后边 (Index 2 >= 0)
+                        ub_stab[5], lb_stab[5] = margin, -margin          # 对角线
+                    
+                    elif contact_sequence_FR[j] == 0: # FR 摆动，FL-RL-RR 支撑
+                        ub_stab[0], lb_stab[0] = -margin, -ACADOS_INFTY # 前边 (Index 0 <= 0)
+                        ub_stab[3], lb_stab[3] = -margin, -ACADOS_INFTY # 左边 (Index 3 <= 0)
+                        ub_stab[4], lb_stab[4] = margin, -margin
+
+                    elif contact_sequence_RL[j] == 0: # RL 摆动，FL-FR-RR 支撑
+                        ub_stab[0], lb_stab[0] = -margin, -ACADOS_INFTY
+                        ub_stab[1], lb_stab[1] = ACADOS_INFTY, 0 + margin
+                        ub_stab[4], lb_stab[4] = margin, -margin
+                    
+                    elif contact_sequence_RR[j] == 0: # RR 摆动，FL-FR-RL 支撑
+                        ub_stab[2], lb_stab[2] = ACADOS_INFTY, 0 + margin
+                        ub_stab[3], lb_stab[3] = -margin, -ACADOS_INFTY
+                        ub_stab[5], lb_stab[5] = margin, -margin
+
+                ub_total = np.concatenate([ub_total, ub_stab])
+                lb_total = np.concatenate([lb_total, lb_stab])
+                
+            # No friction constraint at the end! we don't have u_N
+            if j == self.horizon:
+                if self.use_foothold_constraints:
+                    if self.use_stability_constraints:
+                        ub_total = np.concatenate((foot_up, ub_stab))
+                        lb_total = np.concatenate((foot_low, lb_stab))
+                    else:
+                        ub_total = foot_up
+                        lb_total = foot_low
+                else:
+                    if self.use_stability_constraints:
+                        ub_total = ub_stab
+                        lb_total = lb_stab
+                    else:
+                        continue
+            # 7. 特殊处理：第 0 步通常只保留力约束，防止初始状态冲突导致无解
+            if j == 0:
+                self.acados_ocp_solver.constraints_set(j, "uh", self.constr_uh_friction)
+                self.acados_ocp_solver.constraints_set(j, "lh", self.constr_lh_friction)
+            else:
+                self.acados_ocp_solver.constraints_set(j, "uh", ub_total)
+                self.acados_ocp_solver.constraints_set(j, "lh", lb_total)
+            
+            # save the constraint for logging
+            self.upper_bound[j] = ub_total.tolist()
+            self.lower_bound[j] = lb_total.tolist()
+        
+
+    def reset(self):
+        self.acados_ocp_solver.reset()
+        self.acados_ocp_solver = AcadosOcpSolver(
+            self.ocp,
+            json_file=self.ocp.code_export_directory + "acados_ocp.json",
+            build=False,
+            generate=False,
+        )
+     
+    def _setup_ocp_cost(self):
         nx = self.state_dim
         nu = self.control_dim
         ny = nx + nu
@@ -87,9 +518,11 @@ class Quadruped_NMPC_Handler:
         self.ocp.cost.Vu[nx:nx+nu,:nu] = np.eye(nu)
         self.ocp.cost.Vx_e = np.eye(nx)
 
-    def setup_ocp_constraints(self, quadruped_constraints: QuadrupedConstraints):
+    def _setup_ocp_constraints(self, quadruped_constraints: QuadrupedConstraints):
         # friction cone
         Jbu, lb, ub = quadruped_constraints.get_friction_cone_bounds(self.grf_min, self.grf_max)
+        self.constr_uh_friction = copy.deepcopy(ub)
+        self.constr_lh_friction = copy.deepcopy(lb)
         self.ocp.model.con_h_expr = Jbu
         self.ocp.constraints.uh = ub
         self.ocp.constraints.lh = lb
@@ -136,9 +569,9 @@ class Quadruped_NMPC_Handler:
         X0 = np.zeros(shape=(self.states_dim,))
         self.ocp.constraints.x0 = X0
 
-    def setup_ocp_initialize_params(self):
+    def _setup_ocp_initialize_params(self):
         init_contact_sequence = np.array([1, 1, 1, 1])
-        init_mu = self.sim_config.get("physics", {}).get("mu", 0.5)
+        init_mu = self.sim_config.get("physics", {}).get("mu")
         init_stance_proximity = np.array([0.0, 0.0, 0.0, 0.0])
         init_base_position = np.array([0.0, 0.0, 0.0])
         init_base_yaw = np.array([0.0])
@@ -158,7 +591,7 @@ class Quadruped_NMPC_Handler:
             )
         )
 
-    def setup_ocp_options(self):
+    def _setup_ocp_options(self):
         self.ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
         self.ocp.hessian_approx = "GAUSS_NEWTON"
         self.ocp.integrator_type = "ERK"

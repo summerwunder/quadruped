@@ -30,9 +30,13 @@ class LegJointMap:
     foot_vel: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))      # 足端相对于基座的速度 [m/s]
     foot_acc: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))      # 足端加速度 [m/s²]
     
+    hip_pos: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))       # 髋关节相对于基座的位置 [m]
+    
     # ========== 笛卡尔空间状态 (世界坐标系) ==========
     foot_pos_world: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64)) # 足端在世界系下的位置 [m]
     foot_vel_world: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64)) # 足端在世界系下的速度 [m/s]
+    foot_pos_centered: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))  # 足端相对于质心的位置 [m]
+    hip_pos_world: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))  # 髋关节在世界系下的位置 [m]
     
     # ========== 接触信息 ==========
     contact_state: bool = False                # 是否接触地面
@@ -181,7 +185,14 @@ class QuadrupedState:
             }
         else:
             raise ValueError(f"Invalid frame: {frame}")
-    
+        
+    def get_num_contact(self) -> int:
+        """计算当前接触的腿数"""
+        return int(self.FL.contact_state) + \
+            int(self.FR.contact_state) + \
+            int(self.RL.contact_state) + \
+            int(self.RR.contact_state)
+        
     def get_contact_states(self) -> Dict[str, bool]:
         """获取所有接触状态"""
         return {
@@ -199,6 +210,20 @@ class QuadrupedState:
             'RL': self.RL.contact_force.copy(),
             'RR': self.RR.contact_force.copy(),
         }
+    
+    def get_max_feet_dist_to_hip(self) -> float:
+        """
+        计算四只脚相对于各自髋关节(Hip)在水平面(XY)上的最大偏离距离。
+        """
+        
+        dists = []
+        for leg_name in ['FL', 'FR', 'RL', 'RR']:
+            leg = getattr(self, leg_name)
+            delta_xy = leg.foot_pos[:2] - leg.hip_pos[:2]
+            dist = np.linalg.norm(delta_xy)
+            dists.append(dist)
+            
+        return max(dists)
 
 
 @dataclass
@@ -226,6 +251,40 @@ class Trajectory:
 
 
 @dataclass
+class ReferenceState:
+    """参考状态容器，用于将 MPC/控制器的参考信息传入算法
+    - `ref_foot_*`: 每条腿的参考足端位置，形状 (1, 3) 或 (3,)
+    - `ref_linear_velocity`: 参考线速度 (3,)
+    - `ref_angular_velocity`: 参考角速度 (3,)
+    - `ref_orientation`: 参考姿态 (roll, pitch, yaw) (3,)
+    - `ref_position`: 参考基座位置 (3,)
+    """
+
+    ref_foot_FL: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    ref_foot_FR: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    ref_foot_RL: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    ref_foot_RR: np.ndarray = field(default_factory=lambda: np.zeros(3))
+
+    ref_linear_velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    ref_angular_velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    ref_orientation: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    ref_position: np.ndarray = field(default_factory=lambda: np.zeros(3))
+
+    def as_dict(self) -> dict:
+        """返回一个便于序列化/传递的字典副本（numpy arrays 保持原样）。"""
+        return {
+            'ref_foot_FL': self.ref_foot_FL.copy(),
+            'ref_foot_FR': self.ref_foot_FR.copy(),
+            'ref_foot_RL': self.ref_foot_RL.copy(),
+            'ref_foot_RR': self.ref_foot_RR.copy(),
+            'ref_linear_velocity': self.ref_linear_velocity.copy(),
+            'ref_angular_velocity': self.ref_angular_velocity.copy(),
+            'ref_orientation': self.ref_orientation.copy(),
+            'ref_position': self.ref_position.copy(),
+        }
+
+
+@dataclass
 class RobotConfig:
     """机器人配置参数"""
     
@@ -240,13 +299,13 @@ class RobotConfig:
     inertia: np.ndarray = None                 # 惯性张量 (3, 3) 或 (9,) [kg·m²]
     
     # ========== 运动学参数 ==========
-    hip_height: float = 0.5                    # 髋关节高度 [m]
+    hip_height: float = 0.3                   # 髋关节高度 [m]
     foot_radius: float = 0.01                  # 足端半径 [m]
     
     # ========== 控制参数 ==========
     swing_kp: float = 500.0                    # 摇摆相控制比例系数
     swing_kd: float = 10.0                     # 摇摆相控制微分系数
-    step_height: float = 0.05                  # 步高 [m]
+    step_height: float = 0.06                  # 步高 [m]
     
     # ========== 关节限制 ==========
     joint_limits_qpos: Optional[np.ndarray] = None  # 关节位置限制 (nq, 2)

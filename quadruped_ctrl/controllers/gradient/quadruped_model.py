@@ -254,5 +254,6 @@ class QuadrupedModel:
         acados_model.p = self.param
         acados_model.name = 'quadruped_model'
         return acados_model
+    
 
 
