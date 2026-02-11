@@ -1,0 +1,14 @@
+robot_name: "go2"
+physics:
+  mass: 15.019
+  inertia: [1.5846e-01, 1.2166e-04, -1.5544e-02,
+            1.2166e-04, 4.6864e-01, -3.1200e-05,
+            -1.5544e-02, -3.1200e-05, 5.2447e-01]
+
+
+geometry:
+  hip_height: 0.28
+
+swing_control:
+  kp: 600 
+  kd: 15

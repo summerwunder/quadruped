@@ -1,0 +1,57 @@
+# --- Python 核心 ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- uv 特有 ---
+.uv/
+uv.lock
+.vscode/
+# --- acados 自动生成的代码 (重要：防止代码仓库被数千个生成的 C 文件淹没) ---/
+acados_ocp.json
+acados_sim.json
+acados_solver/
+# --- MuJoCo & 仿真相关 ---
+*.log
+*.out
+*.cache
+# 如果你有录制仿真视频
+*.mp4
+*.avi
+
+# --- 编译器 & 临时文件 ---
+*.o
+*.obj
+*.dylib
+*.dll
+*.so
+*.a
+.DS_Store
+
+# --- 环境变量 & 密钥 ---
+.env
+.venv
+.envrc
+
+
+*.pyc
