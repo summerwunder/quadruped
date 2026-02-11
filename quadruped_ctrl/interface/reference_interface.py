@@ -8,6 +8,7 @@ from quadruped_ctrl.planning.periodic_gait_generator import PeriodicGaitGenerato
 from quadruped_ctrl.planning.foothold_reference_generator import FootholdGenerator
 from quadruped_ctrl.planning.terrain_estimator import TerrainEstimator
 import numpy as np
+from typing import Tuple
 from scipy.spatial.transform import Rotation as R
 
 class ReferenceInterface:
@@ -17,7 +18,7 @@ class ReferenceInterface:
         self.sim_config = env.sim_config
         self.mpc_config = ConfigLoader.load_mpc_config(mpc_config_path)
         
-        dt = self.sim_config.get('simulation').get('dt', 0.002)
+        dt = self.sim_config.get('physics', {}).get('dt', 0.002)
         horizon = self.mpc_config.get('horizon')
         if self.mpc_config.get('solver').get('use_nonuniform_discretization'):
             # TODO: 支持非均匀时间步长
@@ -62,7 +63,7 @@ class ReferenceInterface:
         abs_time: float,
         ref_base_lin_vel: np.ndarray,
         ref_base_ang_vel: np.ndarray,
-    ) -> ReferenceState:
+    ) -> Tuple[ReferenceState, np.ndarray, dict]:
         """计算参考状态      
         Args:
             current_state: 当前机器人状态
@@ -73,7 +74,10 @@ class ReferenceInterface:
             ref_base_ang_vel: 参考角速度
         
         Returns:
-            ReferenceState对象，包含期望的脚位置、速度、加速度等信息
+            ReferenceState对象
+            contact_sequence: 支撑/摆动序列 (4, H)
+            swing_refs: 摆动腿参考轨迹 {'FL': {'pos':(H,3),'vel':(H,3),'acc':(H,3)}, ...}
+            
         """
         # TODO: 调整期望速度，如果机器人处于异常位置
         
@@ -106,6 +110,8 @@ class ReferenceInterface:
         )
         
         ref_pos = np.array([0, 0, self.robot.hip_height])
+        
+        
         ref_pos[2] -= current_state.base.pos[2] - com_pos[2]
         
         # TODO: 目前只考虑 Roll 和 Pitch ，YAW应该是任务为导向
@@ -136,54 +142,30 @@ class ReferenceInterface:
                                   contact_sequence: np.ndarray,
                                   foothold_targets: dict,
                                   dt_list: np.ndarray):
-        """Compute swing pos/vel/acc references per leg over the horizon.
+        """Compute swing pos/vel/acc references for the first timestep only.
 
-        Returns dict: {leg: {'pos':(H,3),'vel':(H,3),'acc':(H,3)}}
+        Returns dict: {leg: {'pos':(3,),'vel':(3,),'acc':(3,)}}
         """
         legs = ['FL', 'FR', 'RL', 'RR']
-        H = contact_sequence.shape[1]
         dt_arr = np.asarray(dt_list, dtype=np.float64)
 
         results = {}
         for i, leg_name in enumerate(legs):
             seq = contact_sequence[i, :]
-            pos_hist = np.zeros((H, 3), dtype=np.float64)
-            vel_hist = np.zeros((H, 3), dtype=np.float64)
-            acc_hist = np.zeros((H, 3), dtype=np.float64)
-
             leg = current_state.get_leg_by_name(leg_name)
-            lift_off_pos = np.asarray(leg.foot_pos, dtype=np.float64).copy()
-
-            k = 0
-            while k < H:
-                if seq[k] == 0:
-                    # swing segment start
-                    k0 = k
-                    while k < H and seq[k] == 0:
-                        k += 1
-                    k1 = k
-
-                    # touch down target: first stance foothold after swing
-                    if k1 < H:
-                        touch_down = np.asarray(foothold_targets[leg_name][k1], dtype=np.float64)
-                    else:
-                        touch_down = np.asarray(foothold_targets[leg_name][-1], dtype=np.float64)
-
-                    # accumulate times within swing
-                    t_acc = 0.0
-                    for idx in range(k0, k1):
-                        p, v, a = self.swing_generator.get_swing_reference_trajectory(t_acc, lift_off_pos, touch_down)
-                        pos_hist[idx, :] = p
-                        vel_hist[idx, :] = v
-                        acc_hist[idx, :] = a
-                        t_acc += dt_arr[idx]
-
-                    lift_off_pos = touch_down.copy()
-                else:
-                    pos_hist[k, :] = np.asarray(foothold_targets[leg_name][k], dtype=np.float64)
-                    vel_hist[k, :] = np.zeros(3)
-                    acc_hist[k, :] = np.zeros(3)
-                    k += 1
-            results[leg_name] = {'pos': pos_hist, 'vel': vel_hist, 'acc': acc_hist}
+            
+            # 只计算第一个时间步 (k=0)
+            if seq[0] == 0:
+                # 摆动相：计算摆动轨迹
+                lift_off_pos = np.asarray(leg.foot_pos, dtype=np.float64).copy()
+                touch_down = np.asarray(foothold_targets[leg_name], dtype=np.float64)
+                p, v, a = self.swing_generator.get_wing_reference_trajectory(0.0, lift_off_pos, touch_down)
+            else:
+                # 支撑相：脚保持当前位置
+                p = np.asarray(leg.foot_pos, dtype=np.float64).copy()
+                v = np.zeros(3, dtype=np.float64)
+                a = np.zeros(3, dtype=np.float64)
+            
+            results[leg_name] = {'pos': p, 'vel': v, 'acc': a}
 
         return results

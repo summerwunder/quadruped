@@ -341,6 +341,7 @@ class QuadrupedEnv(gym.Env):
         # 更新基座状态
         # MuJoCo freejoint: qpos[0:3]位置, qpos[3:7]四元数(w,x,y,z)
         self.state.base.pos = self.data.qpos[0:3].copy()
+        self.state.base.com = self._compute_com()
         self.state.base.quat = self.data.qpos[3:7].copy()
         
         # 设置旋转矩阵和欧拉角
@@ -414,6 +415,18 @@ class QuadrupedEnv(gym.Env):
         mujoco.mj_fullM(self.model, mass_matrix, self.data.qM)
         return mass_matrix
     
+    def _compute_com(self) -> np.ndarray:
+        """计算机器人质心位置"""
+        com = np.zeros(3, dtype=np.float64)
+        total_mass = 0.0
+        for i in range(self.model.nbody):
+            body_mass = self.model.body_mass[i]
+            body_pos = self.data.subtree_com[i]
+            com += body_mass * body_pos
+            total_mass += body_mass
+        if total_mass > 0:
+            com /= total_mass
+        return com
 
     
     def _compute_contact_forces(self):

@@ -1,12 +1,12 @@
 from acados_template import AcadosOcp, AcadosOcpSolver
-from quadruped_ctrl.controllers.gradient.quadruped_model import QuadrupedModel
+from quadruped_ctrl.controllers.nmpc_gradient.quadruped_model import QuadrupedModel
 from quadruped_ctrl.quadruped_env import QuadrupedEnv
 import numpy as np
 import casadi as cs
 from quadruped_ctrl.utils.config_loader import ConfigLoader
 from quadruped_ctrl.controllers.controller_base import BaseController
 from quadruped_ctrl.datatypes import QuadrupedState, ReferenceState
-from quadruped_ctrl.controllers.gradient.controller_constraint import QuadrupedConstraints
+from quadruped_ctrl.controllers.nmpc_gradient.controller_constraint import QuadrupedConstraints
 import pathlib
 import scipy
 import os 
@@ -19,9 +19,18 @@ class Quadruped_NMPC_Handler(BaseController):
         self.env = env
         self.robot = env.robot
         self.sim_config = env.sim_config
+        
         # load MPC specific config (weights, R, horizon 等)
         self.mpc_config = ConfigLoader.load_mpc_config(mpc_config_path)
         self.verbose = self.mpc_config.get("verbose", False)
+        
+        # config parameters: horizon 必须先定义
+        self.horizon = int(self.mpc_config.get('horizon'))
+        self.dt = float(self.sim_config.get('physics').get('dt', 0.002))
+        self.T_horizon = self.horizon * self.dt
+        
+        self.previous_status = -1
+        self.previous_contact_sequence = np.zeros((4, self.horizon))
 
         self.sim_optimize_config = self.sim_config.get("optimize", {})
         self.use_foothold_constraint = self.sim_optimize_config.get('use_foothold_constraint')
@@ -34,10 +43,6 @@ class Quadruped_NMPC_Handler(BaseController):
         self.gravity = self.sim_config.get('physics', {}).get('gravity', 9.81)
         self.grf_max = self.robot.mass * self.gravity
         self.grf_min = self.mpc_config.get('grf_min')
-        # config parameters: 优先使用 mpc_config 中的 horizon，其次回退到 sim_config
-        self.horizon = int(self.mpc_config.get('horizon'))
-        self.dt = float(self.sim_config.get('physics').get('dt', 0.002))
-        self.T_horizon = self.horizon * self.dt
         # solver / optimization flags (from mpc_config)
         solver_conf = self.mpc_config.get('solver', {}) if isinstance(self.mpc_config, dict) else {}
         self.use_DDP = bool(solver_conf.get('use_ddp', False))
@@ -51,12 +56,13 @@ class Quadruped_NMPC_Handler(BaseController):
         self.alpha_integrator = float(solver_conf.get('alpha_integrator', 0.1))
         self.integrator_clip = np.array(solver_conf.get('integrator_clip', [0.5, 0.2, 0.2, 0.0, 0.0, 1.0]))
         self.integral_errors = np.zeros(6)
+        
         # nonuniform discretization
         self.use_nonuniform_discretization = bool(solver_conf.get('use_nonuniform_discretization', False))
         self.dt_fine_grained = float(solver_conf.get('dt_fine_grained', self.dt))
         self.horizon_fine_grained = int(solver_conf.get('horizon_fine_grained', 0))
         
-        self.quadruped_model = QuadrupedModel(env.sim_config)
+        self.quadruped_model = QuadrupedModel(env.sim_config_path)
         acados_model = self.quadruped_model.export_quadruped_model()
         self.state_dim = acados_model.x.size()[0]
         self.control_dim = acados_model.u.size()[0]
@@ -81,9 +87,10 @@ class Quadruped_NMPC_Handler(BaseController):
         code_export_dir = pathlib.Path(__file__).parent.resolve() / "acados_solver"
         self.ocp.code_export_directory = str(code_export_dir)
         # ocp solver
+        json_path = str(code_export_dir) + "/acados_ocp.json"
         self.acados_ocp_solver = AcadosOcpSolver(
             self.ocp, 
-            json_file=str(code_export_dir / "acados_ocp.json")
+            json_file=json_path
         )
         for stage in range(self.horizon + 1):
             self.acados_ocp_solver.set(stage, "x", np.zeros((self.state_dim,)))
@@ -91,7 +98,7 @@ class Quadruped_NMPC_Handler(BaseController):
             self.acados_ocp_solver.set(stage, "u", np.zeros((self.control_dim,)))
 
 
-    def compute_control(
+    def get_action(
         self,
         state: QuadrupedState,
         reference: ReferenceState,
@@ -257,7 +264,7 @@ class Quadruped_NMPC_Handler(BaseController):
                 state.RR.foot_pos_centered,
                 self.integral_errors
             )
-        ).reshape((self.state_dim,1))
+        ).flatten()
         self.acados_ocp_solver.set(0, "lbx", state_acados)
         self.acados_ocp_solver.set(0, "ubx", state_acados)
         
@@ -289,8 +296,133 @@ class Quadruped_NMPC_Handler(BaseController):
         control = self.acados_ocp_solver.get(0, "u")
         optimal_GRF = control[12:]
         optimal_foothold = np.zeros((4, 3))
-        optimal_footholds_assigned = np.zeros((4,), dtype="bool")
+        optimal_footholds_assigned = [False, False, False, False]
         
+        # We need to provide the next touchdown foothold position.
+        # We first take the foothold in stance now (they are not optimized!)
+        # and flag them as True (aka "assigned")
+        
+        contact_sequences = [
+            FL_contact_sequence, 
+            FR_contact_sequence, 
+            RL_contact_sequence, 
+            RR_contact_sequence
+        ]
+        # 将当前足端位置放入列表
+        current_foot_pos = [
+            state.FL.foot_pos_centered, 
+            state.FR.foot_pos_centered, 
+            state.RL.foot_pos_centered, 
+            state.RR.foot_pos_centered
+        ]
+        ref_list = [
+            reference.ref_foot_FL,
+            reference.ref_foot_FR,
+            reference.ref_foot_RL,
+            reference.ref_foot_RR
+        ]
+        # 2. 处理当前处于支撑相 (Stance) 的腿
+        # 支撑腿的落脚点就是当前所在的位置（不进行优化，直接锁定）
+        for i in range(4):
+            if contact_sequences[i][0] == 1:
+                optimal_foothold[i] = current_foot_pos[i]
+                optimal_footholds_assigned[i] = True
+        
+        yaw = state.base.euler[2]
+        R_wb = np.array([[np.cos(yaw), np.sin(yaw)], [-np.sin(yaw), np.cos(yaw)]])
+        base_pos_xy = state.base.pos[0:2]
+        for i in range(4): # 遍历四条腿
+            if not optimal_footholds_assigned[i]:
+                # 在预测时域内寻找 Touchdown（从 0 变 1 的瞬间）
+                for j in range(1, self.horizon):
+                    if contact_sequences[i][j] == 1 and contact_sequences[i][j-1] == 0:
+                        # 从状态向量 x 中提取该腿对应的落脚点 (索引需根据你的模型定义，这里假设为 12+i*3)
+                        # 注意：此处索引需与你的 Acados Model 状态定义一致
+                        start_idx = 12 + i * 3
+                        raw_foothold = self.acados_ocp_solver.get(j, "x")[start_idx : start_idx+3]
+                        
+                        # --- 安全裁剪 (Saturation) ---
+                        # 将落脚点转换到身体局部水平系进行裁剪
+                        local_xy = R_wb @ (raw_foothold[:2] - base_pos_xy)
+                        
+                        if constraint is None:
+                            # 如果没有外部约束（如视觉），使用参考点附近的默认盒子
+                            ref_xy = R_wb @ (ref_list[i][:2] - base_pos_xy)
+                            up_limit = ref_xy + 0.10
+                            low_limit = ref_xy - 0.10
+                        else:
+                            # 使用视觉提供的 VFA 约束
+                            # up_limit = R_wb @ (constraint[0:2, i] - base_pos_xy)
+                            # low_limit = R_wb @ (constraint[9:11, i] - base_pos_xy)
+                            pass
+
+                        # 执行裁剪并转换回全局世界坐标
+                        local_xy_clipped = np.clip(local_xy, low_limit, up_limit)
+                        optimal_foothold[i][:2] = R_wb.T @ local_xy_clipped + base_pos_xy
+                        optimal_foothold[i][2] = raw_foothold[2] # Z轴通常跟随地形
+                        
+                        optimal_footholds_assigned[i] = True
+                        break # 找到第一个落地时刻即停止
+
+        # 4. 兜底逻辑：如果在整个 Horizon 内该腿都不落地
+        # 为了不让 Swing Controller 迷茫，直接给参考落脚点
+        for i in range(4):
+            if not optimal_footholds_assigned[i]:
+                optimal_foothold[i] = ref_list[i]
+        
+        # 5. 确定下一时刻的目标状态 (用于下一帧的初始值)
+        # 考虑到控制延迟，如果 dt 很小，通常取 index=2
+        next_idx = 2 if self.dt <= 0.02 else 1
+        optimal_next_state = self.acados_ocp_solver.get(next_idx, "x")
+        
+        # --- 6. 求解失败的兜底逻辑 (Status != 0) ---
+        # Status 1: 达到最大迭代次数未收敛; Status 4: QP 求解失败
+        if status != 0:
+            if self.verbose:
+                print(f"MPC Solver failed with status {status}. Using fallback strategy.")
+            
+            # A. 摆动腿回退：直接使用 FRG 提供的参考落脚点
+            for i in range(4):
+                if contact_sequences[i][0] == 0:
+                    optimal_foothold[i] = ref_list[i]
+
+            # B. 支撑腿力矩回退：使用上一时刻的GRF平滑过渡（避免突变）
+            if self.previous_status == 0 and np.linalg.norm(self.previous_optimal_GRF) > 0:
+                # 如果上一次成功，使用上一次的GRF
+                optimal_GRF = self.previous_optimal_GRF.copy()
+            else:
+                # 如果连续失败，使用静态平衡力
+                num_stance = state.get_num_contact()
+                optimal_GRF = np.zeros(12)
+                
+                if num_stance > 0:
+                    f_z_avg = self.grf_max / num_stance
+                    for i in range(4):
+                        if contact_sequences[i][0] == 1:
+                            optimal_GRF[i*3 + 2] = f_z_avg
+            
+            # 不要reset，保留求解器状态以便下次warm start
+        
+        self.previous_optimal_GRF = optimal_GRF
+        self.previous_status = status
+        self.previous_contact_sequence = contact_sequence
+        # 核心逻辑：将相对于 (0,0) 的局部坐标，还原到世界的绝对坐标系中
+        # 这样底层的 PD 控制器才能在正确的地图位置执行
+        world_base_pos = self.initial_base_pos # 这是你初始保存的真实世界位置
+
+        for i in range(4):
+            optimal_foothold[i] += world_base_pos
+
+        # 对预测的下一个状态进行还原，用于监控和调试以及状态观测
+        optimal_next_state[0:3] += world_base_pos # Base Position
+        # 更新状态向量中的足端位置（12-24维）
+        for i in range(4):
+            idx = 12 + i * 3
+            optimal_next_state[idx : idx+3] = optimal_foothold[i]
+        
+        return optimal_GRF, optimal_foothold, optimal_next_state, status
+    
+    
     def warm_start(self,
         state_acados,
         reference,
@@ -326,7 +458,13 @@ class Quadruped_NMPC_Handler(BaseController):
         reference = copy.deepcopy(reference)
         state = copy.deepcopy(state)
         
+        # 保存当前高度用于参考位置
+        current_xy = state.base.pos[:2].copy()
+        
+        # 参考位置：XY平移到0，Z保持期望高度（相对于当前）
         reference.ref_position = reference.ref_position - state.base.pos
+        reference.ref_position[2] = reference.ref_position[2]  # Z高度已经在reference_interface中正确设置
+        
         reference.ref_foot_FL = reference.ref_foot_FL - state.base.pos
         reference.ref_foot_FR = reference.ref_foot_FR - state.base.pos
         reference.ref_foot_RL = reference.ref_foot_RL - state.base.pos
@@ -369,10 +507,10 @@ class Quadruped_NMPC_Handler(BaseController):
         
         # 4. 计算【未来步】的落地约束 (Swing/Touchdown Constraints)
         if constraint is None:
-            up_sw_FL, low_sw_FL = create_box(reference.ref_foot_FL[0], 0.15, 0.005)
-            up_sw_FR, low_sw_FR = create_box(reference.ref_foot_FR[0], 0.15, 0.005)
-            up_sw_RL, low_sw_RL = create_box(reference.ref_foot_RL[0], 0.15, 0.005)
-            up_sw_RR, low_sw_RR = create_box(reference.ref_foot_RR[0], 0.15, 0.005)
+            up_sw_FL, low_sw_FL = create_box(reference.ref_foot_FL, 0.15, 0.005)
+            up_sw_FR, low_sw_FR = create_box(reference.ref_foot_FR, 0.15, 0.005)
+            up_sw_RL, low_sw_RL = create_box(reference.ref_foot_RL, 0.15, 0.005)
+            up_sw_RR, low_sw_RR = create_box(reference.ref_foot_RR, 0.15, 0.005)
         else:
             # TODO: 解析 VFA 矩阵，为每一条腿设置视觉安全区
             pass
@@ -517,6 +655,9 @@ class Quadruped_NMPC_Handler(BaseController):
         self.ocp.cost.Vx[:nx,:nx] = np.eye(nx)
         self.ocp.cost.Vu[nx:nx+nu,:nu] = np.eye(nu)
         self.ocp.cost.Vx_e = np.eye(nx)
+        # 初始化参考值
+        self.ocp.cost.yref = np.zeros((ny,))
+        self.ocp.cost.yref_e = np.zeros((nx,))
 
     def _setup_ocp_constraints(self, quadruped_constraints: QuadrupedConstraints):
         # friction cone
@@ -566,12 +707,12 @@ class Quadruped_NMPC_Handler(BaseController):
         self.upper_bound = np.array(list_upper_bound, dtype=object)
         self.lower_bound = np.array(list_lower_bound, dtype=object)
         # Set initial state constraint
-        X0 = np.zeros(shape=(self.states_dim,))
+        X0 = np.zeros(shape=(self.state_dim,))
         self.ocp.constraints.x0 = X0
 
     def _setup_ocp_initialize_params(self):
         init_contact_sequence = np.array([1, 1, 1, 1])
-        init_mu = self.sim_config.get("physics", {}).get("mu")
+        init_mu = np.array([self.sim_config.get("physics", {}).get("mu", 0.5)])
         init_stance_proximity = np.array([0.0, 0.0, 0.0, 0.0])
         init_base_position = np.array([0.0, 0.0, 0.0])
         init_base_yaw = np.array([0.0])
@@ -595,6 +736,7 @@ class Quadruped_NMPC_Handler(BaseController):
         self.ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
         self.ocp.hessian_approx = "GAUSS_NEWTON"
         self.ocp.integrator_type = "ERK"
+        self.ocp.solver_options.qp_solver_cond_N = self.horizon
         if self.use_DDP:
             self.ocp.solver_options.nlp_solver_type = 'DDP'
             self.ocp.solver_options.nlp_solver_max_iter = self.num_qp_iterations
@@ -643,6 +785,9 @@ class Quadruped_NMPC_Handler(BaseController):
             self.ocp.solver_options.hpipm_mode = "SPEED_ABS"
         
         self.ocp.solver_options.levenberg_marquardt = 1e-3
+        
+        # 关闭 Acados 的打印输出
+        self.ocp.solver_options.print_level = 0
 
         # Set prediction horizon
         self.ocp.solver_options.tf = self.T_horizon

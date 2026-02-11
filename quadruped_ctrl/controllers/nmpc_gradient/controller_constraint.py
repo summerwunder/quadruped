@@ -1,6 +1,6 @@
 import numpy as np
 import casadi as cs
-from quadruped_ctrl.controllers.gradient.quadruped_model import QuadrupedModel
+from quadruped_ctrl.controllers.nmpc_gradient.quadruped_model import QuadrupedModel
 from quadruped_ctrl.datatypes import QuadrupedState, ReferenceState
 class QuadrupedConstraints:
     def __init__(self, model:QuadrupedModel, use_static_stability: bool, acados_infty: float):

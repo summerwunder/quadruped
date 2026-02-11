@@ -1,5 +1,5 @@
 # --- Python 核心 ---
-__pycache__
+__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -27,11 +27,10 @@ wheels/
 .uv/
 uv.lock
 .vscode/
-# --- acados 自动生成的代码 (重要：防止代码仓库被数千个生成的 C 文件淹没) ---
-c_generated_code/
+# --- acados 自动生成的代码 (重要：防止代码仓库被数千个生成的 C 文件淹没) ---/
 acados_ocp.json
 acados_sim.json
-
+acados_solver/
 # --- MuJoCo & 仿真相关 ---
 *.log
 *.out
@@ -53,3 +52,6 @@ acados_sim.json
 .env
 .venv
 .envrc
+
+
+*.pyc

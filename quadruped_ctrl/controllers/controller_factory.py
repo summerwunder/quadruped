@@ -17,7 +17,7 @@ class ControllerFactory:
             return PDController(env, **kwargs)
         
         elif name == "mpc_gradient":
-            from quadruped_ctrl.controllers.gradient.controller_handler import Quadruped_NMPC_Handler
+            from quadruped_ctrl.controllers.nmpc_gradient.controller_handler import Quadruped_NMPC_Handler
             print("[Factory] Creating Gradient MPC Controller...")
             return Quadruped_NMPC_Handler(env, **kwargs)
             

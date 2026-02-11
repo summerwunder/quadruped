@@ -14,8 +14,6 @@ class BaseController(ABC):
     @abstractmethod
     def get_action(self, **kwargs):
         """
-        Input: 
-        Output: numpy.ndarray (The joint torques to be applied to actuators)
         """
         pass
 

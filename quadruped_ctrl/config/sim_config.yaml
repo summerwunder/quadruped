@@ -11,7 +11,7 @@ optimize:
   use_friction_compensation: false
   use_foothold_optimization: false
 
-  use_foothold_constraint: true
+  use_foothold_constraint: false
   use_static_stability: false
   use_zmp_stability: false
 

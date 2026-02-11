@@ -78,6 +78,7 @@ class BaseState:
     
     # ========== 位置和姿态 (世界坐标系) ==========
     pos: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))          # 基座位置 [m]
+    com: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))          # 质心位置 [m]
     quat: np.ndarray = field(default_factory=lambda: np.array([1, 0, 0, 0], dtype=np.float64))  # 四元数 [w, x, y, z]
     rot_mat: np.ndarray = field(default_factory=lambda: np.eye(3, dtype=np.float64))       # 旋转矩阵 (3x3)
     euler: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))       # 欧拉角 [roll, pitch, yaw] [rad]

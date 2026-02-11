@@ -13,10 +13,10 @@ class WBInterface:
     def __init__(self, env):
         self.env = env
         
-        # 从环境的 robot_config 获取摆动腿 PD 参数
+        # 从环境的 robot 获取摆动腿 PD 参数
         # 这些参数来自 quadruped_env 加载的 robot_config 配置
-        self.swing_kp = env.robot_config.swing_kp
-        self.swing_kd = env.robot_config.swing_kd
+        self.swing_kp = env.robot.swing_kp
+        self.swing_kd = env.robot.swing_kd
         
         optimize = env.sim_config.get('optimize', {})
         self.use_feedback_linearization = optimize.get('use_feedback_linearization', False)
@@ -67,7 +67,7 @@ class WBInterface:
         # 这既是基础笛卡尔空间力，也是反馈线性化的核心项
         q_idx = leg.qvel_idxs
         _J = leg.jac_pos_base[:, q_idx]
-        _J_dot = leg.jac_pos_dot_base[:, q_idx]
+        _J_dot = leg.jac_dot_base[:, q_idx]
 
         acc = d_acc + self.swing_kp * (d_pos - leg.foot_pos) + self.swing_kd * (d_vel - leg.foot_vel)
         acc = acc.reshape((3, ))

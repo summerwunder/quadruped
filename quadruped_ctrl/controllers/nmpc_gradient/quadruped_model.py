@@ -139,9 +139,15 @@ class QuadrupedModel:
         foot_position_RL = state[18:21]
         foot_position_RR = state[21:24]
 
-        stanceFL, stanceFR, stanceRL, stanceRR = params[0:4]
-        stance_proximity_FL, stance_proximity_FR, stance_proximity_RL, stance_proximity_RR = params[5:9]
+        stanceFL = params[0]
+        stanceFR = params[1]
+        stanceRL = params[2]
+        stanceRR = params[3]
         mu_friction = params[4]
+        stance_proximity_FL = params[5]
+        stance_proximity_FR = params[6]
+        stance_proximity_RL = params[7]
+        stance_proximity_RR = params[8]
         mass = params[-1]
         inertia = params[-10:-1].reshape((3,3))
         external_wrench_linear = params[13:16]
@@ -159,7 +165,9 @@ class QuadrupedModel:
         state_dot_body_velocity = gravity + (1.0 / mass) * force_total
         # state 3 : angular velocity of body
         omega_rotation_matrix = cs.SX.zeros(3,3)
-        roll, pitch, yaw = body_orientation
+        roll = body_orientation[0]
+        pitch = body_orientation[1]
+        yaw = body_orientation[2]
         omega_rotation_matrix[0,0] = 1
         omega_rotation_matrix[0,2] = -cs.sin(pitch)
         omega_rotation_matrix[1,1] = cs.cos(roll)
