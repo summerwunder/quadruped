@@ -22,6 +22,7 @@ if __name__ == '__main__':
             # 随机action控制
             # action = env.action_space.sample()
             pos = np.array([0.0, 0.7, -1.4] * 4)
+            print(state.base.pos[2])  # 0.32
             action = pd_controller.get_action(state, pos)
             obs, _, terminated, truncated, info = env.step(action)
             

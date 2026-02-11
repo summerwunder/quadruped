@@ -38,13 +38,25 @@ class ReferenceInterface:
         
         # 初始化摇摆轨迹生成器
         swing_height = self.robot.step_height
-        swing_duration = (1 - self.gait_generator.duty_factor) * (1 / self.gait_generator.step_freq)
+        step_freq = float(self.gait_generator.step_freq)
+        if step_freq <= 0.0 or self.gait_generator.duty_factor >= 1.0:
+            # full_stance 模式：不产生摆动轨迹
+            self.gait_generator.is_full_stance = True
+            swing_duration = 1e-3
+            # 用 dt 作为非零站立时间，避免除零
+            stance_time = float(self.contact_sequence_dts[0])
+        else:
+            swing_duration = (1 - self.gait_generator.duty_factor) * (1 / step_freq)
+            stance_time = (1 / step_freq) * self.gait_generator.duty_factor
         self.swing_generator = SwingTrajectoryGenerator(
              swing_height=swing_height,
              swing_duration=swing_duration)
         
+        # 初始化 swing_time 追踪数组 (FL, FR, RL, RR)
+        self.swing_time = np.zeros(4, dtype=np.float64)
+        self.swing_period = swing_duration
+        
         # 落脚点生成器
-        stance_time = (1 / self.gait_generator.step_freq) * self.gait_generator.duty_factor
         self.foothold_generator = FootholdGenerator(
             stance_time=stance_time,
             robot_height=self.robot.hip_height,
@@ -109,11 +121,11 @@ class ReferenceInterface:
             ref_lin_w
         )
         
-        ref_pos = np.array([0, 0, self.robot.hip_height])
+        # ref_pos = np.array([0, 0, self.robot.hip_height])
+        # ref_pos[2] -= current_state.base.pos[2] - com_pos[2]
         
-        
-        ref_pos[2] -= current_state.base.pos[2] - com_pos[2]
-        
+        # TODO: only test velocity tracking on flat terrain
+        ref_pos = current_state.base.pos.copy()
         # TODO: 目前只考虑 Roll 和 Pitch ，YAW应该是任务为导向
         reference_orientation =  [terrain_roll, terrain_pitch, 0]    
         reference_state = ReferenceState(
@@ -147,19 +159,29 @@ class ReferenceInterface:
         Returns dict: {leg: {'pos':(3,),'vel':(3,),'acc':(3,)}}
         """
         legs = ['FL', 'FR', 'RL', 'RR']
-        dt_arr = np.asarray(dt_list, dtype=np.float64)
+        # TODO: 先简单设置
+        dt = float(dt_list[0])
 
         results = {}
         for i, leg_name in enumerate(legs):
             seq = contact_sequence[i, :]
             leg = current_state.get_leg_by_name(leg_name)
             
+            # 更新 swing_time：摆动时累加，支撑时清零
+            if seq[0] == 0:  # 摆动相
+                if self.swing_time[i] < self.swing_period:
+                    self.swing_time[i] += dt
+            else:  # 支撑相
+                self.swing_time[i] = 0.0
+            
             # 只计算第一个时间步 (k=0)
             if seq[0] == 0:
-                # 摆动相：计算摆动轨迹
+                # 摆动相：使用当前 swing_time 计算轨迹
                 lift_off_pos = np.asarray(leg.foot_pos, dtype=np.float64).copy()
                 touch_down = np.asarray(foothold_targets[leg_name], dtype=np.float64)
-                p, v, a = self.swing_generator.get_wing_reference_trajectory(0.0, lift_off_pos, touch_down)
+                # 关键修复：使用实际的 swing_time 而不是写死的 0.0
+                t_swing = min(self.swing_time[i], self.swing_period)  # clamp 防止超出
+                p, v, a = self.swing_generator.get_swing_reference_trajectory(t_swing, lift_off_pos, touch_down)
             else:
                 # 支撑相：脚保持当前位置
                 p = np.asarray(leg.foot_pos, dtype=np.float64).copy()

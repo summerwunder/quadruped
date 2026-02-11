@@ -28,9 +28,15 @@ class Quadruped_NMPC_Handler(BaseController):
         self.horizon = int(self.mpc_config.get('horizon'))
         self.dt = float(self.sim_config.get('physics').get('dt', 0.002))
         self.T_horizon = self.horizon * self.dt
+        # self.grf_max = self.sim_config.get('grf_max')
+        self.gravity = self.sim_config.get('physics', {}).get('gravity', 9.81)
+        self.grf_max = self.robot.mass * self.gravity
+        self.grf_min = self.mpc_config.get('grf_min')
         
         self.previous_status = -1
         self.previous_contact_sequence = np.zeros((4, self.horizon))
+        f_z_init = (self.robot.mass * self.gravity) / 4.0
+        self.previous_optimal_GRF = np.array([0.0, 0.0, f_z_init] * 4)
 
         self.sim_optimize_config = self.sim_config.get("optimize", {})
         self.use_foothold_constraint = self.sim_optimize_config.get('use_foothold_constraint')
@@ -39,10 +45,7 @@ class Quadruped_NMPC_Handler(BaseController):
         self.use_warm_start = self.sim_optimize_config.get('use_warm_start', False)
         self.use_stability_constraint = self.use_static_stability or self.use_zmp_stability
         
-        # self.grf_max = self.sim_config.get('grf_max')
-        self.gravity = self.sim_config.get('physics', {}).get('gravity', 9.81)
-        self.grf_max = self.robot.mass * self.gravity
-        self.grf_min = self.mpc_config.get('grf_min')
+
         # solver / optimization flags (from mpc_config)
         solver_conf = self.mpc_config.get('solver', {}) if isinstance(self.mpc_config, dict) else {}
         self.use_DDP = bool(solver_conf.get('use_ddp', False))
@@ -86,12 +89,27 @@ class Quadruped_NMPC_Handler(BaseController):
         self._setup_ocp_options()
         code_export_dir = pathlib.Path(__file__).parent.resolve() / "acados_solver"
         self.ocp.code_export_directory = str(code_export_dir)
-        # ocp solver
-        json_path = str(code_export_dir) + "/acados_ocp.json"
-        self.acados_ocp_solver = AcadosOcpSolver(
-            self.ocp, 
-            json_file=json_path
-        )
+        
+        # 检查是否已经编译过 
+        import platform
+        lib_ext = "dylib" if platform.system() == "Darwin" else "so"
+        lib_path = code_export_dir / f"libacados_ocp_solver_{self.ocp.model.name}.{lib_ext}"
+        json_path = code_export_dir / "acados_ocp.json"
+        
+        # 如果库文件和 JSON 都存在，跳过重新编译
+        if lib_path.exists() and json_path.exists():
+            self.acados_ocp_solver = AcadosOcpSolver(
+                self.ocp, 
+                json_file=str(json_path),
+                generate=False,
+                build=False
+            )
+        else:
+            print(f"[Acados] 首次编译求解器")
+            self.acados_ocp_solver = AcadosOcpSolver(
+                self.ocp, 
+                json_file=str(json_path)
+            )
         for stage in range(self.horizon + 1):
             self.acados_ocp_solver.set(stage, "x", np.zeros((self.state_dim,)))
         for stage in range(self.horizon):
@@ -130,9 +148,11 @@ class Quadruped_NMPC_Handler(BaseController):
             
             # TODO: ref_foot_*可以尝试传入数组，不然会迟钝
             # It's simply mass*acc/number_of_legs_in_stance!! Force x and y are always 0
-            number_of_leg_in_stance = state.get_num_contact()
-            if number_of_leg_in_stance == 0:
-                reference_force_stance = 0
+            number_of_leg_in_stance = int(
+                FL_contact_sequence[i] + FR_contact_sequence[i] + RL_contact_sequence[i] + RR_contact_sequence[i]
+            )
+            if number_of_leg_in_stance <= 0:
+                reference_force_stance = self.grf_max / 4.0
             else:
                 reference_force_stance = self.grf_max / number_of_leg_in_stance
             reference_force_FL = reference_force_stance * FL_contact_sequence[i]
@@ -391,15 +411,15 @@ class Quadruped_NMPC_Handler(BaseController):
                 # 如果上一次成功，使用上一次的GRF
                 optimal_GRF = self.previous_optimal_GRF.copy()
             else:
-                # 如果连续失败，使用静态平衡力
-                num_stance = state.get_num_contact()
+                # 如果连续失败，使用静态平衡力（基于计划接触）
+                num_stance = int(sum(seq[0] for seq in contact_sequences))
                 optimal_GRF = np.zeros(12)
-                
-                if num_stance > 0:
-                    f_z_avg = self.grf_max / num_stance
-                    for i in range(4):
-                        if contact_sequences[i][0] == 1:
-                            optimal_GRF[i*3 + 2] = f_z_avg
+                if num_stance <= 0:
+                    num_stance = 4
+                f_z_avg = self.grf_max / num_stance
+                for i in range(4):
+                    if contact_sequences[i][0] == 1:
+                        optimal_GRF[i*3 + 2] = f_z_avg
             
             # 不要reset，保留求解器状态以便下次warm start
         
@@ -645,7 +665,7 @@ class Quadruped_NMPC_Handler(BaseController):
         ny = nx + nu
         
         Q_mat, R_mat = self._set_weight_by_config()
-        self.ocp.dims.N = self.horizon
+        self.ocp.solver_options.N_horizon = self.horizon
         self.ocp.cost.cost_type = "LINEAR_LS"
         self.ocp.cost.cost_type_e = "LINEAR_LS"
         self.ocp.cost.W_e = Q_mat

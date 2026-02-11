@@ -22,13 +22,17 @@ class WBInterface:
         self.use_feedback_linearization = optimize.get('use_feedback_linearization', False)
         self.use_friction_compensation = optimize.get('use_friction_compensation', False)
         
-    def compute_tau(self, state: QuadrupedState, 
-                    swing_targets: Optional[dict] = None) -> np.ndarray:
+    def compute_tau(self, state: QuadrupedState,
+                    swing_targets: Optional[dict] = None,
+                    contact_sequence: Optional[np.ndarray] = None,
+                    optimal_GRF: Optional[np.ndarray] = None) -> np.ndarray:
         """计算控制力矩
         
         Args:
             state: 机器人状态
             swing_targets: 摆动腿目标 {'FL': {'pos': [3,], 'vel': [3,], 'acc': [3,]}, ...}
+            contact_sequence: 计划的接触序列 (4,) 或 (4, H)，用于覆盖测量接触
+            optimal_GRF: MPC 输出的 GRF (12,)，用于支撑腿力矩计算
             
         Returns:
             控制力矩 (12,) - [FL(3), FR(3), RL(3), RR(3)]
@@ -37,12 +41,24 @@ class WBInterface:
         
         for leg_idx, leg_name in enumerate(['FL', 'FR', 'RL', 'RR']):
             leg = getattr(state, leg_name) 
-            
-            if leg.contact_state:
+
+            if contact_sequence is not None:
+                planned_contact = contact_sequence[leg_idx]
+                if isinstance(planned_contact, (np.ndarray, list)):
+                    planned_contact = planned_contact[0]
+                is_stance = bool(planned_contact)
+            else:
+                is_stance = bool(leg.contact_state)
+
+            if is_stance:
                 # ========== 支撑腿力矩 ==========
                 q_idx = leg.qvel_idxs 
                 J_leg = leg.jac_pos_world[:, q_idx]
-                tau = -J_leg.T @ leg.contact_force
+                if optimal_GRF is not None:
+                    force = optimal_GRF[leg_idx * 3:(leg_idx + 1) * 3]
+                else:
+                    force = leg.contact_force
+                tau = -J_leg.T @ force
                 tau_total[leg_idx*3:(leg_idx+1)*3] = tau
                 
             else:

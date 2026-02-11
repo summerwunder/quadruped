@@ -19,7 +19,7 @@ optimize:
 
 
 gait:
-  active: "trot"
+  active: "trot"  # options: trot, pace, crawl, full_stance
 
   gaits:
     trot:
