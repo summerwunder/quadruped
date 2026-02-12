@@ -125,8 +125,8 @@ class ReferenceInterface:
         # ref_pos = current_state.base.pos.copy()
         # TODO: 目前只考虑 Roll 和 Pitch ，YAW应该是任务为导向
         reference_orientation =  [terrain_roll, terrain_pitch, 0]    
-        # TODO: 先不考虑地形，保持身体姿态水平
-        reference_orientation = [0, 0, 0]
+        # # TODO: 先不考虑地形，保持身体姿态水平
+        # reference_orientation = [0, 0, 0]
         # 中心化：使用当前机器人位置作为原点
         center_pos = current_state.base.pos.copy()
         
@@ -165,11 +165,11 @@ class ReferenceInterface:
             dt_list=self.contact_sequence_dts
         )
         
-        if self.env.verbose and self.env.current_step % 50 == 0:
-            for leg in ['FL', 'FR', 'RL', 'RR']:
-                if contact_sequence[['FL', 'FR', 'RL', 'RR'].index(leg), 0] == 0:
-                    print(f"{leg} is swinging. Swing time: {self.swing_time[['FL', 'FR', 'RL', 'RR'].index(leg)]:.3f}s")
-                    print(f"{leg} swing_ref pos:", swing_refs[leg]['pos'].tolist())
+        # if self.env.verbose and self.env.current_step % 50 == 0:
+        #     for leg in ['FL', 'FR', 'RL', 'RR']:
+        #         if contact_sequence[['FL', 'FR', 'RL', 'RR'].index(leg), 0] == 0:
+        #             print(f"{leg} is swinging. Swing time: {self.swing_time[['FL', 'FR', 'RL', 'RR'].index(leg)]:.3f}s")
+        #             print(f"{leg} swing_ref pos:", swing_refs[leg]['pos'].tolist())
                     
         return reference_state, contact_sequence, swing_refs
 

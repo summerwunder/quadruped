@@ -15,7 +15,7 @@ import copy
 ACADOS_INFTY = 1e2
 class Quadruped_NMPC_Handler(BaseController):
     def __init__(self, env: QuadrupedEnv, 
-                 mpc_config_path: str = "mpc_config.yaml"):
+                 mpc_config_path: str = "go1_mpc_config.yaml"):
         self.env = env
         self.robot = env.robot
         self.sim_config = env.sim_config

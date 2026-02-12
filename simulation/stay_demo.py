@@ -8,7 +8,9 @@ from quadruped_ctrl.quadruped_env import QuadrupedEnv
 from quadruped_ctrl.controllers.controller_factory import ControllerFactory
 from quadruped_ctrl.interface.reference_interface import ReferenceInterface
 from quadruped_ctrl.interface.wb_interface import WBInterface
-
+'''
+full stance 站立测试支撑腿
+'''
 
 def main() -> None:
     env = QuadrupedEnv(
@@ -19,7 +21,7 @@ def main() -> None:
     mujoco.mj_resetDataKeyframe(env.model, env.data, 0)
     obs, _ = env.reset()
     
-    mpc_config_path = "mpc_config.yaml"
+    mpc_config_path = "go1_mpc_config.yaml"
     mpc_controller = ControllerFactory.create_controller("mpc_gradient", env, mpc_config_path=mpc_config_path)
     ref_interface = ReferenceInterface(env, mpc_config_path=mpc_config_path)
     wb_interface = WBInterface(env)

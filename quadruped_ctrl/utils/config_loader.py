@@ -194,7 +194,7 @@ class ConfigLoader:
         return parsed_gaits[gait_name]
 
     @staticmethod
-    def load_mpc_config(config_path: str = 'mpc_config.yaml') -> Dict[str, Any]:
+    def load_mpc_config(config_path: str = 'go1_mpc_config.yaml') -> Dict[str, Any]:
         """加载 MPC 配置文件（权重、代价矩阵、预测步长等）
         Args:
             config_path: MPC 配置文件路径（相对于 config 目录）
@@ -203,7 +203,7 @@ class ConfigLoader:
         """
         if not os.path.isabs(config_path):
             module_dir = os.path.dirname(__file__)
-            config_path = os.path.join(module_dir, '..', 'config', config_path)
+            config_path = os.path.join(module_dir, '..', 'config', 'mpc', config_path)
 
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"MPC config file not found: {config_path}")
