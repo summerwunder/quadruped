@@ -22,12 +22,12 @@ class PeriodicGaitGenerator:
         phases = (abs_time * self.step_freq + self.phase_offsets) % 1.0
         return (phases < self.duty_factor).astype(np.int8)
 
-    def get_horizon_sequence(self, abs_time, dt_list):
+    def get_horizon_sequence(self, abs_time, dt_list, is_full_stance=False):
         """
         为 MPC 计算未来的触地序列
         dt_list: 预测步的时间间隔列表 (支持非均匀采样)
         """
-        if self.is_full_stance:
+        if self.is_full_stance or is_full_stance:
             return np.ones((4, len(dt_list)), dtype=np.int8)
 
         # 计算未来的绝对时刻

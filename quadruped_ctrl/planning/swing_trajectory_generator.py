@@ -1,80 +1,75 @@
 import numpy as np 
-
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 class SwingTrajectoryGenerator:
     def __init__(self, swing_height: float, swing_duration: float):
         self.swing_height = swing_height
         self.swing_duration = swing_duration
-        self.half_swing_duration = swing_duration / 2.0
-        self.factor_duration = 1.0 / self.half_swing_duration   # [0 , 1]
+        # 归一化时间缩放因子 (1/T)
+        self.factor_duration = 1.0 / self.swing_duration
     
-    def _evaluate_bezier(self, t_rel:float, p1, p2, p3, p4):
+    def _evaluate_bezier_quintic(self, t_rel: float, p0, p1, p2, p3, p4, p5):
+        """
+        五阶贝塞尔曲线评估函数
+        t_rel: 归一化时间 [0, 1]
+        p0-p5: 6个控制点 (3D)
+        """
         t = t_rel
-        t_inv = 1 - t
-        pos = (t_inv**3) * p1 + \
-              3 * (t_inv**2) * t * p2 + \
-              3 * t_inv * (t**2) * p3 + \
-              (t**3) * p4
-        vel = 3 * ( (t_inv**2) * (p2 - p1) + \
-                    2 * t_inv * t * (p3 - p2) + \
-                    (t**2) * (p4 - p3) ) * self.factor_duration
-        acc = 6 * ( (t_inv) * (p3 - 2 * p2 + p1) + \
-                    t * (p4 - 2 * p3 + p2) ) * (self.factor_duration ** 2)
+        t_inv = 1.0 - t
+        
+        # 1. 位置 (Position)
+        pos = (t_inv**5) * p0 + \
+              5 * (t_inv**4) * t * p1 + \
+              10 * (t_inv**3) * (t**2) * p2 + \
+              10 * (t_inv**2) * (t**3) * p3 + \
+              5 * t_inv * (t**4) * p4 + \
+              (t**5) * p5
+              
+        # 2. 速度 (Velocity) - 位置对时间t的一阶导数 (P'(t) * dt_rel/dt)
+        vel = 5 * ( (t_inv**4) * (p1 - p0) + \
+                    4 * (t_inv**3) * t * (p2 - p1) + \
+                    6 * (t_inv**2) * (t**2) * (p3 - p2) + \
+                    4 * t_inv * (t**3) * (p4 - p3) + \
+                    (t**4) * (p5 - p4) ) * self.factor_duration
+                    
+        # 3. 加速度 (Acceleration) - 位置对时间t的二阶导数 (P''(t) * (dt_rel/dt)^2)
+        acc = 20 * ( (t_inv**3) * (p2 - 2*p1 + p0) + \
+                     3 * (t_inv**2) * t * (p3 - 2*p2 + p1) + \
+                     3 * t_inv * (t**2) * (p4 - 2*p3 + p2) + \
+                     (t**3) * (p5 - 2*p4 + p3) ) * (self.factor_duration ** 2)
+                     
         return pos.flatten(), vel.flatten(), acc.flatten()
 
-    def get_swing_reference_trajectory(self, 
-                                       t:float, 
-                                       lift_off:np.ndarray, 
-                                       touch_down:np.ndarray)-> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Calculate swing leg reference trajectory
-        Args:
-            t: current swing time (s)
-            lift_off: lift-off position (3,)
-            touch_down: touch-down position (3,)
-        Returns:
-            des_foot_pos: desired foot position (3,)
-            des_foot_vel: desired foot velocity (3,)
-            des_foot_acc: desired foot acceleration (3,)
-        """
-        
+    def get_swing_reference_trajectory(self, t: float, lift_off: np.ndarray, touch_down: np.ndarray):
         t = np.clip(t, 0.0, self.swing_duration)
+        t_rel = t * self.factor_duration  
+        
         lift_off = lift_off.reshape(3)
         touch_down = touch_down.reshape(3)
-        mid_point = 0.5 * (lift_off + touch_down)
+        z_peak = max(lift_off[2], touch_down[2]) + self.swing_height
+        
+        # 定义五阶控制点 (6个)
+        # P0, P1 锁死在起点：保证起始速度和加速度为0（或平滑起步）
+        p0 = lift_off
+        p1 = lift_off 
+        
+        # P2, P3 负责隆起高度。
+        # 注意：贝塞尔曲线不经过控制点，所以控制点要设得比 z_peak 高一些，实际轨迹才能达到 z_peak
+        # 这里补偿系数取 1.5 左右比较接近物理期望
+        p2 = np.array([lift_off[0], lift_off[1], z_peak + self.swing_height * 0.5])
+        p3 = np.array([touch_down[0], touch_down[1], z_peak + self.swing_height * 0.5])
+        
+        # P4, P5 锁死在终点：保证落地平稳
+        p4 = touch_down
+        p5 = touch_down
 
-        if t <= self.half_swing_duration:
-            t_rel = t * self.factor_duration
-            p1 = lift_off
-            p2 = lift_off
-            p3 = np.array([lift_off[0],lift_off[1], self.swing_height])
-            p4 = np.array([mid_point[0], mid_point[1], self.swing_height])
-            return self._evaluate_bezier(t_rel, p1, p2, p3, p4)
-        else:
-            t_rel = (t - self.half_swing_duration) * self.factor_duration
-            p1 = np.array([mid_point[0], mid_point[1], self.swing_height])
-            p2 = np.array([touch_down[0], touch_down[1], self.swing_height])
-            p3 = touch_down
-            p4 = touch_down
-            return self._evaluate_bezier(t_rel, p1, p2, p3, p4)
-    
+        return self._evaluate_bezier_quintic(t_rel, p0, p1, p2, p3, p4, p5)
+
     def plot_trajectory(self, lift_off: np.ndarray, touch_down: np.ndarray, 
                        num_samples: int = 100, save_path: str = None):
-        """Plot complete swing trajectory
-        
-        Args:
-            lift_off: lift-off position (3,)
-            touch_down: touch-down position (3,)
-            num_samples: number of samples
-            save_path: save path, if None then show plot
-        """
-        import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import Axes3D
-        
         t_array = np.linspace(0, self.swing_duration, num_samples)
-        
-        positions = []
-        velocities = []
-        accelerations = []
+        positions, velocities, accelerations = [], [], []
         
         for t in t_array:
             pos, vel, acc = self.get_swing_reference_trajectory(t, lift_off, touch_down)
@@ -82,161 +77,60 @@ class SwingTrajectoryGenerator:
             velocities.append(vel)
             accelerations.append(acc)
         
-        positions = np.array(positions)  # (N, 3)
-        velocities = np.array(velocities)  # (N, 3)
-        accelerations = np.array(accelerations)  # (N, 3)
+        positions = np.array(positions)
+        velocities = np.array(velocities)
+        accelerations = np.array(accelerations)
         
         fig = plt.figure(figsize=(15, 10))
         
-        # 1. 3D trajectory
         ax1 = fig.add_subplot(2, 3, 1, projection='3d')
-        ax1.plot(positions[:, 0], positions[:, 1], positions[:, 2], 'b-', linewidth=2, label='Trajectory')
-        ax1.scatter(*lift_off, color='green', s=100, marker='o', label='Lift-off')
+        ax1.plot(positions[:, 0], positions[:, 1], positions[:, 2], 'b-', linewidth=2)
+        ax1.scatter(*lift_off, color='green', s=100, label='Lift-off')
         ax1.scatter(*touch_down, color='red', s=100, marker='s', label='Touch-down')
-        ax1.set_xlabel('X (m)')
-        ax1.set_ylabel('Y (m)')
-        ax1.set_zlabel('Z (m)')
-        ax1.set_title('3D Swing Trajectory')
+        ax1.set_title('3D Quintic Bezier Trajectory')
         ax1.legend()
-        ax1.grid(True)
         
-        # 2. Position vs Time
         ax2 = fig.add_subplot(2, 3, 2)
         ax2.plot(t_array, positions[:, 0], 'r-', label='X')
-        ax2.plot(t_array, positions[:, 1], 'g-', label='Y')
         ax2.plot(t_array, positions[:, 2], 'b-', label='Z')
-        ax2.axhline(y=self.swing_height, color='k', linestyle='--', alpha=0.3, label='Swing height')
-        ax2.set_xlabel('Time (s)')
-        ax2.set_ylabel('Position (m)')
         ax2.set_title('Position vs Time')
-        ax2.legend()
-        ax2.grid(True)
+        ax2.legend(); ax2.grid(True)
         
-        # 3. Velocity vs Time
+        # 速度-时间图 (观察平滑度)
         ax3 = fig.add_subplot(2, 3, 3)
         ax3.plot(t_array, velocities[:, 0], 'r-', label='Vx')
-        ax3.plot(t_array, velocities[:, 1], 'g-', label='Vy')
         ax3.plot(t_array, velocities[:, 2], 'b-', label='Vz')
-        ax3.set_xlabel('Time (s)')
-        ax3.set_ylabel('Velocity (m/s)')
-        ax3.set_title('Velocity vs Time')
-        ax3.legend()
-        ax3.grid(True)
+        ax3.set_title('Velocity vs Time (C1 Continuous)')
+        ax3.legend(); ax3.grid(True)
         
-        # 4. Acceleration vs Time
+        # 加速度-时间图 (观察重点：中间无阶跃)
         ax4 = fig.add_subplot(2, 3, 4)
         ax4.plot(t_array, accelerations[:, 0], 'r-', label='Ax')
-        ax4.plot(t_array, accelerations[:, 1], 'g-', label='Ay')
         ax4.plot(t_array, accelerations[:, 2], 'b-', label='Az')
-        ax4.set_xlabel('Time (s)')
-        ax4.set_ylabel('Acceleration (m/s²)')
-        ax4.set_title('Acceleration vs Time')
-        ax4.legend()
-        ax4.grid(True)
+        ax4.set_title('Acceleration vs Time (C2 Continuous)')
+        ax4.legend(); ax4.grid(True)
         
-        # 5. XY plane projection
+        # XY 平面投影
         ax5 = fig.add_subplot(2, 3, 5)
-        ax5.plot(positions[:, 0], positions[:, 1], 'b-', linewidth=2)
-        ax5.scatter(lift_off[0], lift_off[1], color='green', s=100, marker='o', label='Lift-off')
-        ax5.scatter(touch_down[0], touch_down[1], color='red', s=100, marker='s', label='Touch-down')
-        ax5.set_xlabel('X (m)')
-        ax5.set_ylabel('Y (m)')
+        ax5.plot(positions[:, 0], positions[:, 1], 'b-')
         ax5.set_title('XY Plane Projection')
-        ax5.legend()
-        ax5.grid(True)
-        ax5.axis('equal')
-        
-        # 6. Velocity and acceleration magnitude
-        ax6 = fig.add_subplot(2, 3, 6)
-        vel_magnitude = np.linalg.norm(velocities, axis=1)
-        acc_magnitude = np.linalg.norm(accelerations, axis=1)
-        ax6.plot(t_array, vel_magnitude, 'b-', label='Velocity magnitude')
-        ax6_twin = ax6.twinx()
-        ax6_twin.plot(t_array, acc_magnitude, 'r-', label='Acceleration magnitude')
-        ax6.set_xlabel('Time (s)')
-        ax6.set_ylabel('Velocity magnitude (m/s)', color='b')
-        ax6_twin.set_ylabel('Acceleration magnitude (m/s²)', color='r')
-        ax6.set_title('Velocity and Acceleration Magnitude')
-        ax6.tick_params(axis='y', labelcolor='b')
-        ax6_twin.tick_params(axis='y', labelcolor='r')
-        ax6.grid(True)
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
-            print(f"Plot saved to: {save_path}")
-        else:
-            plt.show()
-        
-        return fig
+        ax5.axis('equal'); ax5.grid(True)
 
+        plt.tight_layout()
+        if save_path: plt.savefig(save_path)
+        else: plt.show()
 
 if __name__ == '__main__':
-    print("=== Swing Trajectory Generator Test ===\n")
+    swing_h = 0.2
+    duration = 0.3
+    gen = SwingTrajectoryGenerator(swing_h, duration)
     
-    # 1. Create generator
-    swing_height = 0.08  # 8cm swing height
-    swing_duration = 0.3  # 300ms swing duration
-    generator = SwingTrajectoryGenerator(swing_height, swing_duration)
-    print(f"Created generator: swing_height={swing_height}m, swing_duration={swing_duration}s\n")
+    lo = np.array([0.0, 0.0, 0.0])
+    td = np.array([0.5, 0.0, 0.2]) 
+    print(f"Testing Z: {lo[2]} -> {td[2]} with swing_height: {swing_h}")
     
-    # 2. Define lift-off and touch-down positions
-    lift_off = np.array([0.0, 0.0, 0.0])  # start point
-    touch_down = np.array([1.0, 0.0, 0.0])  # end point 
-    print(f"Lift-off position: {lift_off}")
-    print(f"Touch-down position: {touch_down}\n")
+    t_test = np.linspace(0, duration, 50)
+    heights = [gen.get_swing_reference_trajectory(t, lo, td)[0][2] for t in t_test]
+    print(f"Max Height Reached: {max(heights):.4f} m")
     
-    # 3. Test trajectory at key moments
-    print("=== Key Moments Trajectory Test ===\n")
-    test_times = [0.0, swing_duration/4, swing_duration/2, 3*swing_duration/4, swing_duration]
-    
-    for t in test_times:
-        pos, vel, acc = generator.get_swing_reference_trajectory(t, lift_off, touch_down)
-        print(f"t = {t:.3f}s:")
-        print(f"  Position: [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]")
-        print(f"  Velocity: [{vel[0]:.4f}, {vel[1]:.4f}, {vel[2]:.4f}]")
-        print(f"  Acceleration: [{acc[0]:.4f}, {acc[1]:.4f}, {acc[2]:.4f}]")
-        print()
-    
-    # 4. Verify boundary conditions
-    print("=== Boundary Conditions Verification ===\n")
-    
-    # Start point verification
-    pos_start, vel_start, _ = generator.get_swing_reference_trajectory(0.0, lift_off, touch_down)
-    pos_error_start = np.linalg.norm(pos_start - lift_off)
-    print(f"Start position error: {pos_error_start:.6f} m")
-    print(f"Start velocity: {vel_start} m/s")
-    
-    # End point verification
-    pos_end, vel_end, _ = generator.get_swing_reference_trajectory(swing_duration, lift_off, touch_down)
-    pos_error_end = np.linalg.norm(pos_end - touch_down)
-    print(f"End position error: {pos_error_end:.6f} m")
-    print(f"End velocity: {vel_end} m/s")
-    
-    # Maximum height verification
-    t_samples = np.linspace(0, swing_duration, 100)
-    max_height = 0.0
-    for t in t_samples:
-        pos, _, _ = generator.get_swing_reference_trajectory(t, lift_off, touch_down)
-        max_height = max(max_height, pos[2])
-    print(f"Actual max height: {max_height:.4f} m (expected: {swing_height:.4f} m)")
-    
-    # Verification results
-    tolerance = 1e-6
-    if pos_error_start < tolerance and pos_error_end < tolerance:
-        print("\nBoundary conditions verification PASSED")
-    else:
-        print(f"\nBoundary conditions verification FAILED! Start error: {pos_error_start}, End error: {pos_error_end}")
-    
-    # 5. Plot trajectory
-    print("\n=== Plot Trajectory ===\n")
-    try:
-        generator.plot_trajectory(lift_off, touch_down, num_samples=100)
-        print("Trajectory plot completed")
-    except Exception as e:
-        print(f"Trajectory plot failed: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    print("\n=== Test Completed ===")
+    gen.plot_trajectory(lo, td)

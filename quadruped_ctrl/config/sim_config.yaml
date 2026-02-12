@@ -5,13 +5,14 @@ physics:
   gravity: 9.81
   mu: 0.5
   
+verbose: true
 
 optimize:
   use_feedback_linearization: false
   use_friction_compensation: false
   use_foothold_optimization: false
 
-  use_foothold_constraint: false
+  use_foothold_constraint: true
   use_static_stability: false
   use_zmp_stability: false
 
@@ -19,7 +20,7 @@ optimize:
 
 
 gait:
-  active: "trot"  # options: trot, pace, crawl, full_stance
+  active: "full_stance"  # options: trot, pace, crawl, full_stance
 
   gaits:
     trot:
@@ -51,6 +52,6 @@ gait:
 
     full_stance:
       type: 5 
-      duty_factor: 1.0
-      step_freq: 0.0
+      duty_factor: 0.65
+      step_freq: 2.0
       phase_offsets: [0.0, 0.0, 0.0, 0.0]

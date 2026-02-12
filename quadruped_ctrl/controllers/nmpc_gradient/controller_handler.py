@@ -22,7 +22,6 @@ class Quadruped_NMPC_Handler(BaseController):
         
         # load MPC specific config (weights, R, horizon 等)
         self.mpc_config = ConfigLoader.load_mpc_config(mpc_config_path)
-        self.verbose = self.mpc_config.get("verbose", False)
         
         # config parameters: horizon 必须先定义
         self.horizon = int(self.mpc_config.get('horizon'))
@@ -309,7 +308,7 @@ class Quadruped_NMPC_Handler(BaseController):
             contact_sequence_RR=RR_contact_sequence
         )
         status = self.acados_ocp_solver.solve()
-        if self.verbose:
+        if self.env.verbose and self.env.current_step % 50 == 0:
             print("ocp time: ", self.acados_ocp_solver.get_stats('time_tot'))
         
         control = self.acados_ocp_solver.get(0, "u")
@@ -397,7 +396,7 @@ class Quadruped_NMPC_Handler(BaseController):
         # --- 6. 求解失败的兜底逻辑 (Status != 0) ---
         # Status 1: 达到最大迭代次数未收敛; Status 4: QP 求解失败
         if status != 0:
-            if self.verbose:
+            if self.env.verbose:
                 print(f"MPC Solver failed with status {status}. Using fallback strategy.")
             
             # A. 摆动腿回退：直接使用 FRG 提供的参考落脚点

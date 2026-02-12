@@ -43,6 +43,7 @@ class QuadrupedEnv(gym.Env):
             module_dir = os.path.dirname(__file__)
             model_path = os.path.join(module_dir, 'assets', 'robot', 'go1', 'scene.xml')
         
+        self.verbose = self.sim_config.get('verbose', False)
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
         

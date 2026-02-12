@@ -71,7 +71,6 @@ class ConfigLoader:
         swing_kp = float(swing_control.get('kp', 60.0))
         swing_kd = float(swing_control.get('kd', 10.0))
         step_height = hip_height * 0.2 
-        
         # 创建配置对象
         config = RobotConfig(
             robot_name=robot_name,

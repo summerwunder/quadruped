@@ -58,12 +58,7 @@ def main() -> None:
                     mass = env.robot.mass,
                     inertia = env.robot.inertia,
                     mu = env.mu
-                )
-                if status != 0 :
-                    print(f"[警告] MPC 求解器状态异常: {status}")
-                    print(f" 支撑腿数: {state.get_num_contact()}")
-                if status == 0 :
-                    print(f"MPC 求解成功: GRF={optimal_GRF}")
+                )   
                 # 将 GRF 写入 state（供 WBInterface 使用）
                 for i, leg_name in enumerate(['FL', 'FR', 'RL', 'RR']):
                     leg = state.get_leg_by_name(leg_name)
