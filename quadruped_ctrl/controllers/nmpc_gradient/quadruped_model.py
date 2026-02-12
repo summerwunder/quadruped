@@ -184,22 +184,22 @@ class QuadrupedModel:
                  cs.skew(foot_position_RR - body_position) @ (foot_force_RR * stanceRR) +\
                  external_wrench_angular
         
-        Rx = cs.SX.zeros(3,3)
+        Rx = cs.SX.eye(3)
         Rx[0,0] = 1
         Rx[1,1] = cs.cos(roll)
-        Rx[1,2] = -cs.sin(roll)
-        Rx[2,1] = cs.sin(roll)
+        Rx[1,2] = cs.sin(roll)
+        Rx[2,1] = -cs.sin(roll)
         Rx[2,2] = cs.cos(roll)
-        Ry = cs.SX.zeros(3,3)
+        Ry = cs.SX.eye(3)
         Ry[0,0] = cs.cos(pitch)
-        Ry[0,2] = cs.sin(pitch)
+        Ry[0,2] = -cs.sin(pitch)
         Ry[1,1] = 1
-        Ry[2,0] = -cs.sin(pitch)
+        Ry[2,0] = cs.sin(pitch)
         Ry[2,2] = cs.cos(pitch)
-        Rz = cs.SX.zeros(3,3)
+        Rz = cs.SX.eye(3)
         Rz[0,0] = cs.cos(yaw)
-        Rz[0,1] = -cs.sin(yaw)
-        Rz[1,0] = cs.sin(yaw)
+        Rz[0,1] = cs.sin(yaw)
+        Rz[1,0] = -cs.sin(yaw)
         Rz[1,1] = cs.cos(yaw)
         R_w_b = Rx @ Ry @ Rz
 

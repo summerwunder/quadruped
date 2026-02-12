@@ -52,7 +52,7 @@ class QuadrupedEnv(gym.Env):
         self.max_steps = 1000
         # self.dt = self.model.opt.timestep
         self.dt = self.sim_config.get('physics', {}).get('dt', 0.002)
-        
+        self.mu = self.sim_config.get('physics', {}).get('mu', 0.5)
         self._setup_joint_mapping()
         
         n_dof = self.robot.get_total_dof()  # 12 (3 DOF per leg * 4 legs) 
@@ -102,7 +102,7 @@ class QuadrupedEnv(gym.Env):
         
         mujoco.mj_forward(self.model, self.data)
 
-        self._update_state_from_mujoco()
+        self.update_state_from_mujoco()
         
         self.current_step = 0
         
@@ -127,7 +127,7 @@ class QuadrupedEnv(gym.Env):
         mujoco.mj_step(self.model, self.data)
         
         # 更新状态
-        self._update_state_from_mujoco()
+        self.update_state_from_mujoco()
         
         # 获取观测
         obs = self.get_observation()
@@ -326,7 +326,7 @@ class QuadrupedEnv(gym.Env):
         
         return leg
     
-    def _update_state_from_mujoco(self):
+    def update_state_from_mujoco(self):
         """从MuJoCo data更新QuadrupedState"""
         if self.state is None:
             # 初始化state
@@ -341,7 +341,9 @@ class QuadrupedEnv(gym.Env):
         # 更新基座状态
         # MuJoCo freejoint: qpos[0:3]位置, qpos[3:7]四元数(w,x,y,z)
         self.state.base.pos = self.data.qpos[0:3].copy()
+        self.state.base.pos_centered = np.zeros(3, dtype=np.float64)
         self.state.base.com = self._compute_com()
+        self.state.base.com_centered = self.state.base.com - self.state.base.pos  # 中心化质心
         self.state.base.quat = self.data.qpos[3:7].copy()
         
         # 设置旋转矩阵和欧拉角

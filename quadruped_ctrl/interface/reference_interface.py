@@ -121,22 +121,36 @@ class ReferenceInterface:
             ref_lin_w
         )
         
-        # ref_pos = np.array([0, 0, self.robot.hip_height])
-        # ref_pos[2] -= current_state.base.pos[2] - com_pos[2]
+        ref_pos = np.array([0, 0, self.robot.hip_height])
+        ref_pos[2] -= current_state.base.pos[2] - com_pos[2]
         
         # TODO: only test velocity tracking on flat terrain
-        ref_pos = current_state.base.pos.copy()
+        # ref_pos = current_state.base.pos.copy()
         # TODO: 目前只考虑 Roll 和 Pitch ，YAW应该是任务为导向
         reference_orientation =  [terrain_roll, terrain_pitch, 0]    
+        
+        # 中心化：使用当前机器人位置作为原点
+        center_pos = current_state.base.pos.copy()
+        
         reference_state = ReferenceState(
+            # 世界坐标系下的参考值
             ref_foot_FL = ref_footholds['FL'],
             ref_foot_FR = ref_footholds['FR'],
             ref_foot_RL = ref_footholds['RL'],
             ref_foot_RR = ref_footholds['RR'],
-            ref_linear_velocity=ref_base_lin_vel,
-            ref_angular_velocity=ref_base_ang_vel,
-            ref_orientation=reference_orientation,
-            ref_position=ref_pos,
+            ref_position = ref_pos,
+            
+            # 中心化坐标系下的参考值（减去当前机器人位置）
+            ref_foot_FL_centered = ref_footholds['FL'] - center_pos,
+            ref_foot_FR_centered = ref_footholds['FR'] - center_pos,
+            ref_foot_RL_centered = ref_footholds['RL'] - center_pos,
+            ref_foot_RR_centered = ref_footholds['RR'] - center_pos,
+            ref_position_centered = ref_pos - center_pos,
+            
+            # 速度和姿态不需要中心化
+            ref_linear_velocity = ref_base_lin_vel,
+            ref_angular_velocity = ref_base_ang_vel,
+            ref_orientation = reference_orientation,
         )
         
         # 计算 swing 参考轨迹（pos, vel, acc），以供控制器/日志使用
@@ -179,7 +193,6 @@ class ReferenceInterface:
                 # 摆动相：使用当前 swing_time 计算轨迹
                 lift_off_pos = np.asarray(leg.foot_pos, dtype=np.float64).copy()
                 touch_down = np.asarray(foothold_targets[leg_name], dtype=np.float64)
-                # 关键修复：使用实际的 swing_time 而不是写死的 0.0
                 t_swing = min(self.swing_time[i], self.swing_period)  # clamp 防止超出
                 p, v, a = self.swing_generator.get_swing_reference_trajectory(t_swing, lift_off_pos, touch_down)
             else:

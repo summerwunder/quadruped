@@ -9,7 +9,7 @@ class QuadrupedConstraints:
         self.ACADOS_INFTY = acados_infty
 
     def get_stability_bounds(self):
-        base_w = self.model.state[:3]
+        base_w = self.model.state[0:3]
         base_vel_w = self.model.state[3:6]
         pos_FL = self.model.state[12:15]
         pos_FR = self.model.state[15:18]
@@ -22,10 +22,10 @@ class QuadrupedConstraints:
         R_wb[0,1] = cs.sin(yaw)
         R_wb[1,0] = -cs.sin(yaw)
         R_wb[1,1] = cs.cos(yaw)
-        pos_FL[0:2] = R_wb @ cs.vertcat(pos_FL[:2]- base_w[0:2])
-        pos_FR[0:2] = R_wb @ cs.vertcat(pos_FR[:2]- base_w[0:2])
-        pos_RL[0:2] = R_wb @ cs.vertcat(pos_RL[:2]- base_w[0:2])
-        pos_RR[0:2] = R_wb @ cs.vertcat(pos_RR[:2]- base_w[0:2])
+        pos_FL[0:2] = R_wb @ (pos_FL[:2]- base_w[0:2])
+        pos_FR[0:2] = R_wb @ (pos_FR[:2]- base_w[0:2])
+        pos_RL[0:2] = R_wb @ (pos_RL[:2]- base_w[0:2])
+        pos_RR[0:2] = R_wb @ (pos_RR[:2]- base_w[0:2])
         
         if self.use_static_stability:
             x = 0.0
@@ -43,10 +43,15 @@ class QuadrupedConstraints:
             x = zmp[0]
             y = zmp[1]
         
-        x_FL, y_FL = pos_FL[0], pos_FL[1]
-        x_FR, y_FR = pos_FR[0], pos_FR[1]
-        x_RL, y_RL = pos_RL[0], pos_RL[1]
-        x_RR, y_RR = pos_RR[0], pos_RR[1]
+        y_FL = pos_FL[1]
+        y_FR = pos_FR[1]
+        y_RL = pos_RL[1]
+        y_RR = pos_RR[1]
+
+        x_FL = pos_FL[0]
+        x_FR = pos_FR[0]
+        x_RL = pos_RL[0]
+        x_RR = pos_RR[0]
         # LF - RF : x < (x2 - x1) (y - y1) / (y2 - y1) + x1
         # RF - RH: y > (y2 - y1) (x - x1) / (x2 - x1) + y1
         # RH - LH : x > (x2 - x1) (y - y1) / (y2 - y1) + x1
@@ -102,19 +107,19 @@ class QuadrupedConstraints:
         R_wb[1,1] = cs.cos(yaw)
         
         foot_position_FL = cs.SX.zeros(3,1)
-        foot_position_FL[0:2] = R_wb @ cs.vertcat(self.model.state[12:14] - base_pos[0:2])
+        foot_position_FL[0:2] = R_wb @ (self.model.state[12:14] - base_pos[0:2])
         foot_position_FL[2] = self.model.state[14]
         
         foot_position_FR = cs.SX.zeros(3,1)
-        foot_position_FR[0:2] = R_wb @ cs.vertcat(self.model.state[15:17] - base_pos[0:2])
+        foot_position_FR[0:2] = R_wb @ (self.model.state[15:17] - base_pos[0:2])
         foot_position_FR[2] = self.model.state[17]
         
         foot_position_RL = cs.SX.zeros(3,1)
-        foot_position_RL[0:2] = R_wb @ cs.vertcat(self.model.state[18:20] - base_pos[0:2])
+        foot_position_RL[0:2] = R_wb @ (self.model.state[18:20] - base_pos[0:2])
         foot_position_RL[2] = self.model.state[20]
         
         foot_position_RR = cs.SX.zeros(3,1)
-        foot_position_RR[0:2] = R_wb @ cs.vertcat(self.model.state[21:23] - base_pos[0:2])
+        foot_position_RR[0:2] = R_wb @ (self.model.state[21:23] - base_pos[0:2])
         foot_position_RR[2] = self.model.state[23]
         Jbu = cs.vertcat(foot_position_FL, foot_position_FR, foot_position_RL, foot_position_RR)
         

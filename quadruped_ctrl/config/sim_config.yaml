@@ -15,7 +15,7 @@ optimize:
   use_static_stability: false
   use_zmp_stability: false
 
-  use_warm_start: false
+  use_warm_start: true
 
 
 gait:

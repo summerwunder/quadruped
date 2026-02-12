@@ -78,7 +78,9 @@ class BaseState:
     
     # ========== 位置和姿态 (世界坐标系) ==========
     pos: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))          # 基座位置 [m]
-    com: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))          # 质心位置 [m]
+    pos_centered: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))  # 基座位置（相对于质心）[m]
+    com: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))          # 质心位置（世界坐标系）[m]
+    com_centered: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))  # 质心位置（相对于base.pos）[m]
     quat: np.ndarray = field(default_factory=lambda: np.array([1, 0, 0, 0], dtype=np.float64))  # 四元数 [w, x, y, z]
     rot_mat: np.ndarray = field(default_factory=lambda: np.eye(3, dtype=np.float64))       # 旋转矩阵 (3x3)
     euler: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))       # 欧拉角 [roll, pitch, yaw] [rad]
@@ -225,6 +227,8 @@ class QuadrupedState:
             dists.append(dist)
             
         return max(dists)
+    
+
 
 
 @dataclass
@@ -254,22 +258,32 @@ class Trajectory:
 @dataclass
 class ReferenceState:
     """参考状态容器，用于将 MPC/控制器的参考信息传入算法
-    - `ref_foot_*`: 每条腿的参考足端位置，形状 (1, 3) 或 (3,)
+    - `ref_foot_*`: 每条腿的参考足端位置（世界坐标系），形状 (3,)
+    - `ref_foot_*_centered`: 每条腿的参考足端位置（中心化坐标系），形状 (3,)
+    - `ref_position`: 参考基座位置（世界坐标系）(3,)
+    - `ref_position_centered`: 参考基座位置（中心化坐标系）(3,)
     - `ref_linear_velocity`: 参考线速度 (3,)
     - `ref_angular_velocity`: 参考角速度 (3,)
     - `ref_orientation`: 参考姿态 (roll, pitch, yaw) (3,)
-    - `ref_position`: 参考基座位置 (3,)
     """
 
+    # 世界坐标系下的参考值
     ref_foot_FL: np.ndarray = field(default_factory=lambda: np.zeros(3))
     ref_foot_FR: np.ndarray = field(default_factory=lambda: np.zeros(3))
     ref_foot_RL: np.ndarray = field(default_factory=lambda: np.zeros(3))
     ref_foot_RR: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    ref_position: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    
+    # 中心化坐标系下的参考值（由 reference_interface 或 env 计算并填充）
+    ref_foot_FL_centered: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    ref_foot_FR_centered: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    ref_foot_RL_centered: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    ref_foot_RR_centered: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    ref_position_centered: np.ndarray = field(default_factory=lambda: np.zeros(3))
 
     ref_linear_velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))
     ref_angular_velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))
     ref_orientation: np.ndarray = field(default_factory=lambda: np.zeros(3))
-    ref_position: np.ndarray = field(default_factory=lambda: np.zeros(3))
 
     def as_dict(self) -> dict:
         """返回一个便于序列化/传递的字典副本（numpy arrays 保持原样）。"""

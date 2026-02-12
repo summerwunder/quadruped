@@ -12,7 +12,7 @@ import scipy
 import os 
 import copy
 
-ACADOS_INFTY = 1e6
+ACADOS_INFTY = 1e2
 class Quadruped_NMPC_Handler(BaseController):
     def __init__(self, env: QuadrupedEnv, 
                  mpc_config_path: str = "mpc_config.yaml"):
@@ -26,7 +26,7 @@ class Quadruped_NMPC_Handler(BaseController):
         
         # config parameters: horizon 必须先定义
         self.horizon = int(self.mpc_config.get('horizon'))
-        self.dt = float(self.sim_config.get('physics').get('dt', 0.002))
+        self.dt = env.dt
         self.T_horizon = self.horizon * self.dt
         # self.grf_max = self.sim_config.get('grf_max')
         self.gravity = self.sim_config.get('physics', {}).get('gravity', 9.81)
@@ -58,7 +58,7 @@ class Quadruped_NMPC_Handler(BaseController):
         self.use_integrators = bool(solver_conf.get('use_integrators', False))
         self.alpha_integrator = float(solver_conf.get('alpha_integrator', 0.1))
         self.integrator_clip = np.array(solver_conf.get('integrator_clip', [0.5, 0.2, 0.2, 0.0, 0.0, 1.0]))
-        self.integral_errors = np.zeros(6)
+        self.integral_errors = np.zeros((6,))
         
         # nonuniform discretization
         self.use_nonuniform_discretization = bool(solver_conf.get('use_nonuniform_discretization', False))
@@ -67,9 +67,10 @@ class Quadruped_NMPC_Handler(BaseController):
         
         self.quadruped_model = QuadrupedModel(env.sim_config_path)
         acados_model = self.quadruped_model.export_quadruped_model()
+        
         self.state_dim = acados_model.x.size()[0]
         self.control_dim = acados_model.u.size()[0]
-        self.initial_base_pos = np.array([0.0, 0.0, 0.0])
+
         # OCP_Cost
         self.ocp = AcadosOcp()
         self.ocp.model = acados_model
@@ -80,8 +81,8 @@ class Quadruped_NMPC_Handler(BaseController):
         )
         self.constr_lh_friction = None
         self.constr_uh_friction = None
-        self.upper_bound = None
-        self.lower_bound = None
+        self.upper_bound = [None] * self.horizon
+        self.lower_bound = [None] * self.horizon
         self._setup_ocp_constraints(self.quadruped_constraints)
         # initialize parameters
         self._setup_ocp_initialize_params()
@@ -132,19 +133,17 @@ class Quadruped_NMPC_Handler(BaseController):
         RL_contact_sequence = contact_sequence[2]
         RR_contact_sequence = contact_sequence[3]
         
-        
-        state, reference = self._perform_state_centering(state, reference)
         for i in range(self.horizon):
             yref = np.zeros((self.state_dim + self.control_dim,))
-            # state reference
-            yref[0:3] = reference.ref_position
+            # state reference 
+            yref[0:3] = reference.ref_position_centered
             yref[3:6] = reference.ref_linear_velocity
             yref[6:9] = reference.ref_orientation
             yref[9:12] = reference.ref_angular_velocity
-            yref[12:15] = reference.ref_foot_FL
-            yref[15:18] = reference.ref_foot_FR
-            yref[18:21] = reference.ref_foot_RL
-            yref[21:24] = reference.ref_foot_RR
+            yref[12:15] = reference.ref_foot_FL_centered
+            yref[15:18] = reference.ref_foot_FR_centered
+            yref[18:21] = reference.ref_foot_RL_centered
+            yref[21:24] = reference.ref_foot_RR_centered
             
             # TODO: ref_foot_*可以尝试传入数组，不然会迟钝
             # It's simply mass*acc/number_of_legs_in_stance!! Force x and y are always 0
@@ -168,16 +167,16 @@ class Quadruped_NMPC_Handler(BaseController):
             
             self.acados_ocp_solver.set(i, "yref", yref)
         
-        # terminal cost reference
+        # terminal cost reference (使用中心化的参考值)
         yref_N = np.zeros(shape = (self.state_dim,))
-        yref_N[0:3] = reference.ref_position
+        yref_N[0:3] = reference.ref_position_centered
         yref_N[3:6] = reference.ref_linear_velocity
         yref_N[6:9] = reference.ref_orientation
         yref_N[9:12] = reference.ref_angular_velocity
-        yref_N[12:15] = reference.ref_foot_FL
-        yref_N[15:18] = reference.ref_foot_FR
-        yref_N[18:21] = reference.ref_foot_RL
-        yref_N[21:24] = reference.ref_foot_RR
+        yref_N[12:15] = reference.ref_foot_FL_centered
+        yref_N[15:18] = reference.ref_foot_FR_centered
+        yref_N[18:21] = reference.ref_foot_RL_centered
+        yref_N[21:24] = reference.ref_foot_RR_centered
         self.acados_ocp_solver.set(self.horizon, "yref", yref_N)
         
         # Fill param!!
@@ -222,9 +221,9 @@ class Quadruped_NMPC_Handler(BaseController):
                 stance_proximity_FR[j],
                 stance_proximity_RL[j],
                 stance_proximity_RR[j],
-                state.base.pos[0],
-                state.base.pos[1],
-                state.base.pos[2],
+                state.base.pos_centered[0],
+                state.base.pos_centered[1],
+                state.base.pos_centered[2],
                 base_yaw,
                 external_wrenches_estimated_param[0],
                 external_wrenches_estimated_param[1],
@@ -250,19 +249,19 @@ class Quadruped_NMPC_Handler(BaseController):
         # to the previous optimal foothold. This is done to avoid the optimization
         # of a foothold that is not considered at all at touchdown! 
         if FL_contact_sequence[0] == 0:
-            state.FL.foot_pos_centered = reference.ref_foot_FL
+            state.FL.foot_pos_centered = reference.ref_foot_FL_centered
 
         if FR_contact_sequence[0] == 0:
-            state.FR.foot_pos_centered = reference.ref_foot_FR
+            state.FR.foot_pos_centered = reference.ref_foot_FR_centered
 
         if RL_contact_sequence[0] == 0:
-            state.RL.foot_pos_centered = reference.ref_foot_RL
+            state.RL.foot_pos_centered = reference.ref_foot_RL_centered
 
         if RR_contact_sequence[0] == 0:
-            state.RR.foot_pos_centered = reference.ref_foot_RR
+            state.RR.foot_pos_centered = reference.ref_foot_RR_centered
             
         if self.use_integrators:
-            self.integral_errors[0] += (state.base.pos[2] - reference.ref_position[2]) * self.alpha_integrator
+            self.integral_errors[0] += (state.base.pos_centered[2] - reference.ref_position_centered[2]) * self.alpha_integrator
             self.integral_errors[1] += (state.base.lin_vel_world[0] - reference.ref_linear_velocity[0]) * self.alpha_integrator
             self.integral_errors[2] += (state.base.lin_vel_world[1] - reference.ref_linear_velocity[1]) * self.alpha_integrator
             self.integral_errors[3] += (state.base.lin_vel_world[2] - reference.ref_linear_velocity[2]) * self.alpha_integrator
@@ -274,7 +273,7 @@ class Quadruped_NMPC_Handler(BaseController):
         
         state_acados = np.concatenate(
             (
-                state.base.pos,
+                state.base.pos_centered,
                 state.base.lin_vel_world,
                 state.base.euler,
                 state.base.ang_vel_world,
@@ -336,10 +335,10 @@ class Quadruped_NMPC_Handler(BaseController):
             state.RR.foot_pos_centered
         ]
         ref_list = [
-            reference.ref_foot_FL,
-            reference.ref_foot_FR,
-            reference.ref_foot_RL,
-            reference.ref_foot_RR
+            reference.ref_foot_FL_centered,
+            reference.ref_foot_FR_centered,
+            reference.ref_foot_RL_centered,
+            reference.ref_foot_RR_centered
         ]
         # 2. 处理当前处于支撑相 (Stance) 的腿
         # 支撑腿的落脚点就是当前所在的位置（不进行优化，直接锁定）
@@ -350,7 +349,7 @@ class Quadruped_NMPC_Handler(BaseController):
         
         yaw = state.base.euler[2]
         R_wb = np.array([[np.cos(yaw), np.sin(yaw)], [-np.sin(yaw), np.cos(yaw)]])
-        base_pos_xy = state.base.pos[0:2]
+        base_pos_xy = state.base.pos_centered[0:2]
         for i in range(4): # 遍历四条腿
             if not optimal_footholds_assigned[i]:
                 # 在预测时域内寻找 Touchdown（从 0 变 1 的瞬间）
@@ -428,13 +427,13 @@ class Quadruped_NMPC_Handler(BaseController):
         self.previous_contact_sequence = contact_sequence
         # 核心逻辑：将相对于 (0,0) 的局部坐标，还原到世界的绝对坐标系中
         # 这样底层的 PD 控制器才能在正确的地图位置执行
-        world_base_pos = self.initial_base_pos # 这是你初始保存的真实世界位置
+        world_base_pos = self.env.state.base.pos 
 
         for i in range(4):
             optimal_foothold[i] += world_base_pos
 
         # 对预测的下一个状态进行还原，用于监控和调试以及状态观测
-        optimal_next_state[0:3] += world_base_pos # Base Position
+        optimal_next_state[0:3] += world_base_pos 
         # 更新状态向量中的足端位置（12-24维）
         for i in range(4):
             idx = 12 + i * 3
@@ -456,48 +455,22 @@ class Quadruped_NMPC_Handler(BaseController):
 
             # 2. 更新足端位置猜测
             # 逻辑：如果预测到第 j 步脚是支撑状态(1)，猜它在当前位置；
-            # 如果是摆动(0)，猜它去参考落脚点
-            x_guess[12:15] = state_acados[12:15] if FL_contact[j] == 1 else reference.ref_foot_FL
+            # 如果是摆动(0)，猜它去参考落脚点(已中心化)
+            x_guess[12:15] = state_acados[12:15] if FL_contact[j] == 1 else reference.ref_foot_FL_centered
             
             # FR 腿 (15:18)
-            x_guess[15:18] = state_acados[15:18] if FR_contact[j] == 1 else reference.ref_foot_FR
+            x_guess[15:18] = state_acados[15:18] if FR_contact[j] == 1 else reference.ref_foot_FR_centered
             
             # RL 腿 (18:21)
-            x_guess[18:21] = state_acados[18:21] if RL_contact[j] == 1 else reference.ref_foot_RL
+            x_guess[18:21] = state_acados[18:21] if RL_contact[j] == 1 else reference.ref_foot_RL_centered
             
             # RR 腿 (21:24)
-            x_guess[21:24] = state_acados[21:24] if RR_contact[j] == 1 else reference.ref_foot_RR
+            x_guess[21:24] = state_acados[21:24] if RR_contact[j] == 1 else reference.ref_foot_RR_centered
             
             self.acados_ocp_solver.set(j, "x", x_guess)
             
 
         
-    # Method to perform the centering of the states and the reference around (0, 0, 0)    
-    def _perform_state_centering(self, state: QuadrupedState, reference: ReferenceState):
-        self.initial_base_pos = copy.deepcopy(state.base.pos)
-        reference = copy.deepcopy(reference)
-        state = copy.deepcopy(state)
-        
-        # 保存当前高度用于参考位置
-        current_xy = state.base.pos[:2].copy()
-        
-        # 参考位置：XY平移到0，Z保持期望高度（相对于当前）
-        reference.ref_position = reference.ref_position - state.base.pos
-        reference.ref_position[2] = reference.ref_position[2]  # Z高度已经在reference_interface中正确设置
-        
-        reference.ref_foot_FL = reference.ref_foot_FL - state.base.pos
-        reference.ref_foot_FR = reference.ref_foot_FR - state.base.pos
-        reference.ref_foot_RL = reference.ref_foot_RL - state.base.pos
-        reference.ref_foot_RR = reference.ref_foot_RR - state.base.pos
-        
-        # TODO: 已经在环境层面进行状态中心化，其实不一定需要在这里重复进行状态中心化了
-        state.FL.foot_pos_centered = state.FL.foot_pos - state.base.pos
-        state.FR.foot_pos_centered = state.FR.foot_pos - state.base.pos
-        state.RL.foot_pos_centered = state.RL.foot_pos - state.base.pos
-        state.RR.foot_pos_centered = state.RR.foot_pos - state.base.pos
-        state.base.pos = np.array([0, 0, 0])
-        return state, reference
-    
     def set_stage_constraint(self,
                              constraint,   # None or np.ndarray givn by outside
                              state: QuadrupedState,
@@ -507,7 +480,7 @@ class Quadruped_NMPC_Handler(BaseController):
                              contact_sequence_RL,
                              contact_sequence_RR):
         yaw = state.base.euler[2]
-        base_xy = state.base.pos[:2]
+        base_xy = state.base.pos_centered[0:2]
         R_wb = np.array([[np.cos(yaw), np.sin(yaw)], [-np.sin(yaw), np.cos(yaw)]])
         
         # 2. 定义局部辅助函数：快速生成一个“约束盒子”
@@ -527,10 +500,10 @@ class Quadruped_NMPC_Handler(BaseController):
         
         # 4. 计算【未来步】的落地约束 (Swing/Touchdown Constraints)
         if constraint is None:
-            up_sw_FL, low_sw_FL = create_box(reference.ref_foot_FL, 0.15, 0.005)
-            up_sw_FR, low_sw_FR = create_box(reference.ref_foot_FR, 0.15, 0.005)
-            up_sw_RL, low_sw_RL = create_box(reference.ref_foot_RL, 0.15, 0.005)
-            up_sw_RR, low_sw_RR = create_box(reference.ref_foot_RR, 0.15, 0.005)
+            up_sw_FL, low_sw_FL = create_box(reference.ref_foot_FL_centered, 0.15, 0.005)
+            up_sw_FR, low_sw_FR = create_box(reference.ref_foot_FR_centered, 0.15, 0.005)
+            up_sw_RL, low_sw_RL = create_box(reference.ref_foot_RL_centered, 0.15, 0.005)
+            up_sw_RR, low_sw_RR = create_box(reference.ref_foot_RR_centered, 0.15, 0.005)
         else:
             # TODO: 解析 VFA 矩阵，为每一条腿设置视觉安全区
             pass
@@ -621,22 +594,22 @@ class Quadruped_NMPC_Handler(BaseController):
 
                 ub_total = np.concatenate([ub_total, ub_stab])
                 lb_total = np.concatenate([lb_total, lb_stab])
+            
+            # 最后一步：保留摩擦力约束，可选地添加足端和稳定性约束
+            if j == self.horizon - 1:
+                # 最后一步始终保留摩擦力约束 (stage N-1仍有控制输入u_{N-1})
+                ub_total = self.constr_uh_friction.copy()
+                lb_total = self.constr_lh_friction.copy()
                 
-            # No friction constraint at the end! we don't have u_N
-            if j == self.horizon:
-                if self.use_foothold_constraints:
-                    if self.use_stability_constraints:
-                        ub_total = np.concatenate((foot_up, ub_stab))
-                        lb_total = np.concatenate((foot_low, lb_stab))
-                    else:
-                        ub_total = foot_up
-                        lb_total = foot_low
-                else:
-                    if self.use_stability_constraints:
-                        ub_total = ub_stab
-                        lb_total = lb_stab
-                    else:
-                        continue
+                if self.use_foothold_constraint:
+                    foot_up = np.concatenate([cur_up_FL, cur_up_FR, cur_up_RL, cur_up_RR])
+                    foot_low = np.concatenate([cur_low_FL, cur_low_FR, cur_low_RL, cur_low_RR])
+                    ub_total = np.concatenate((ub_total, foot_up))
+                    lb_total = np.concatenate((lb_total, foot_low))
+                
+                if self.use_stability_constraint:
+                    ub_total = np.concatenate((ub_total, ub_stab))
+                    lb_total = np.concatenate((lb_total, lb_stab))
             # 7. 特殊处理：第 0 步通常只保留力约束，防止初始状态冲突导致无解
             if j == 0:
                 self.acados_ocp_solver.constraints_set(j, "uh", self.constr_uh_friction)
@@ -708,8 +681,8 @@ class Quadruped_NMPC_Handler(BaseController):
         num_state_constraints = nsh_state_constraint_end - nsh_state_constraint_start
         if num_state_constraints > 0:
             # (Lower/Upper Bound of Soft H）
-            self.ocp.constraints.lsh = np.zeros((num_state_constraints,))
-            self.ocp.constraints.ush = np.zeros((num_state_constraints,))
+            self.ocp.constraints.lsh = np.zeros(num_state_constraints)
+            self.ocp.constraints.ush = np.zeros(num_state_constraints)
             self.ocp.constraints.idxsh = np.array(
                 range(nsh_state_constraint_start, nsh_state_constraint_end)
             )
@@ -718,7 +691,7 @@ class Quadruped_NMPC_Handler(BaseController):
             self.ocp.cost.zl = 1000 * np.ones((ns,))
             self.ocp.cost.Zl = 1 * np.ones((ns,))
             self.ocp.cost.zu = 1000 * np.ones((ns,))
-            self.ocp.cost.Zu = 1 * np.ones((ns,))
+            self.ocp.cost.Zu = 1 * np.ones((ns,)) 
         list_upper_bound = []
         list_lower_bound = []
         for _ in range(self.horizon):

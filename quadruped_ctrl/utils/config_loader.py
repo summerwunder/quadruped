@@ -60,10 +60,7 @@ class ConfigLoader:
         physics = data.get('physics', {})
         mass = float(physics.get('mass', 12.0))
         gravity = float(physics.get('gravity', 9.81))
-        inertia_list = physics.get('inertia', None)
-        inertia = None
-        if inertia_list is not None:
-            inertia = np.array(inertia_list, dtype=np.float64)
+        inertia = np.array(physics.get('inertia', None)).flatten()
         
         # 几何参数
         geometry = data.get('geometry', {})

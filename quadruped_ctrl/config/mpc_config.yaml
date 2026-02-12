@@ -22,7 +22,7 @@ R:
 solver:
   use_ddp: false
   use_rti: false
-  num_qp_iterations: 2
+  num_qp_iterations: 15
   as_rti_type: AS-RTI-A  # options: AS-RTI-A, AS-RTI-B, AS-RTI-C, AS-RTI-D
   solver_mode: balance   # options: balance, robust, fast, crazy_speed
   qp_solver_iter_max: 10
@@ -31,6 +31,6 @@ solver:
   dt_fine_grained: 0.01
   horizon_fine_grained: 4
 
-  use_integrators: False
+  use_integrators: false
   alpha_integrator: 0.1
   integrator_clip: [0.5, 0.2, 0.2, 0.0, 0.0, 1.0]

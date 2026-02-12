@@ -182,8 +182,8 @@ if __name__ == '__main__':
     print(f"Created generator: swing_height={swing_height}m, swing_duration={swing_duration}s\n")
     
     # 2. Define lift-off and touch-down positions
-    lift_off = np.array([0.0, 0.1, 0.0])  # start point
-    touch_down = np.array([0.2, 0.1, 0.0])  # end point (0.2m forward)
+    lift_off = np.array([0.0, 0.0, 0.0])  # start point
+    touch_down = np.array([1.0, 0.0, 0.0])  # end point 
     print(f"Lift-off position: {lift_off}")
     print(f"Touch-down position: {touch_down}\n")
     
