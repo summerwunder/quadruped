@@ -5,7 +5,7 @@ physics:
   gravity: 9.81
   mu: 0.5
   
-verbose: true
+verbose: false
 
 optimize:
   use_feedback_linearization: false

@@ -11,7 +11,7 @@ import mujoco
 import gymnasium as gym
 from gymnasium import spaces
 from typing import Dict, Tuple, Optional, Any
-
+from .utils.visual import render_sphere, render_line, render_vector
 from .datatypes import QuadrupedState, RobotConfig, Trajectory, LegJointMap, BaseState
 from .utils.config_loader import ConfigLoader
 
@@ -22,7 +22,9 @@ class QuadrupedEnv(gym.Env):
     
     def __init__(self, robot_config: Optional[str] = None, 
                  model_path: Optional[str] = None,
-                 sim_config_path: Optional[str] = None):
+                 sim_config_path: Optional[str] = None,
+                 ref_base_lin_vel: Optional[np.ndarray] = None,
+                 ref_base_ang_vel: Optional[np.ndarray] = None):
         """初始化环境
         Args:
             robot_config: 机器人配置，如果为None则使用默认配置
@@ -46,8 +48,11 @@ class QuadrupedEnv(gym.Env):
         self.verbose = self.sim_config.get('verbose', False)
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
+        self.viewer = None
         
         self.state: Optional[QuadrupedState] = None
+        self.ref_base_lin_vel = ref_base_lin_vel if ref_base_lin_vel is not None else np.zeros(3)
+        self.ref_base_ang_vel = ref_base_ang_vel if ref_base_ang_vel is not None else np.zeros(3)
         
         self.current_step = 0
         self.max_steps = 1000
@@ -55,6 +60,9 @@ class QuadrupedEnv(gym.Env):
         self.dt = self.sim_config.get('physics', {}).get('dt', 0.002)
         self.mu = self.sim_config.get('physics', {}).get('mu', 0.5)
         self._setup_joint_mapping()
+        
+        # Store the ids of visual aid geometries
+        self._geom_ids = {}
         
         n_dof = self.robot.get_total_dof()  # 12 (3 DOF per leg * 4 legs) 
         # 观测空间：基座(13) + 每条腿关节状态(3*3+3*3+3*3=27) = 40维
@@ -89,17 +97,14 @@ class QuadrupedEnv(gym.Env):
         
         mujoco.mj_resetData(self.model, self.data)
 
-        init_qpos = np.array([
-            0.0, 0.9, -1.8,  # FL
-            0.0, 0.9, -1.8,  # FR  
-            0.0, 0.9, -1.8,  # RL
-            0.0, 0.9, -1.8,  # RR
-        ])
-        
+        if self.model.nkey > 0:
+            init_qpos = self.model.key_qpos[0].copy() 
+        else:
+            init_qpos = np.zeros(self.model.nq, dtype=np.float64)
         for leg_name in ['FL', 'FR', 'RL', 'RR']:
-            idx_map = self.joint_idx_map[leg_name]
-            leg_idx = ['FL', 'FR', 'RL', 'RR'].index(leg_name)
-            self.data.qpos[idx_map['qpos_idxs']] = init_qpos[leg_idx*3:(leg_idx+1)*3]
+            qpos_idxs = self.joint_idx_map[leg_name]['qpos_idxs']
+            self.data.qpos[qpos_idxs] = init_qpos[qpos_idxs]
+        self.data.qpos[:7] = init_qpos[:7]
         
         mujoco.mj_forward(self.model, self.data)
 
@@ -111,6 +116,8 @@ class QuadrupedEnv(gym.Env):
         info = self.get_info()
         
         return obs, info
+    
+    # TODO: update reference velocity
     
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, Dict]:
         """执行一步仿真
@@ -154,11 +161,56 @@ class QuadrupedEnv(gym.Env):
         Args:
             mode: 渲染模式
         """
-        pass
+        if self.viewer is None and mode == 'human':
+            self.viewer = mujoco.viewer.launch_passive(
+                self.model,
+                self.data,
+                show_left_ui=True,
+                show_right_ui=True,
+                # key_callback=lambda x: self._key_callback(x),
+            )
+            self.viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = False
+            self.viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = False
+            mujoco.mjv_defaultFreeCamera(self.model, self.viewer.cam)
+            
+        if self.viewer is None:
+            return None
+        # 当前速度
+        base_pos = self.state.base.pos if self.state is not None else np.zeros(3)   
+        current_vel = self.state.base.lin_vel if self.state is not None else np.zeros(3)
+        ref_vel = self.ref_base_lin_vel
+        
+        ref_vec_id = self._geom_ids.get('ref_vel_vec', -1)
+        self._geom_ids['ref_vel_vec'] = render_vector(
+            viewer=self.viewer,
+            vector=ref_vel,
+            pos=base_pos + np.array([0, 0, 0.1]),  
+            scale=np.linalg.norm(ref_vel) + 1e-3,  
+            color=np.array([1, 0, 0, 0.8]),      
+            geom_id=ref_vec_id
+        )
+        curr_vec_id = self._geom_ids.get('curr_vel_vec', -1)
+        # 4. 渲染实际速度箭头 (青色)
+        curr_vec_id = self._geom_ids.get('curr_vel_vec', -1)
+        self._geom_ids['curr_vel_vec'] = render_vector(
+            viewer=self.viewer,
+            vector=current_vel,
+            pos=base_pos + np.array([0, 0, 0.2]), 
+            scale=np.linalg.norm(current_vel) + 1e-3,
+            color=np.array([0, 1, 1, 0.8]),       
+            geom_id=curr_vec_id
+        )
+        self.viewer.cam.lookat[:2] = base_pos[:2]
+        self.viewer.cam.distance = 1.5
+        self.viewer.sync()
+            
+        
     
     def close(self):
         """关闭环境"""
-        pass
+        if self.viewer is not None:
+            self.viewer.close()
+            self.viewer = None
     
     def get_observation(self) -> np.ndarray:
         """从当前状态生成观测向量

@@ -2,14 +2,13 @@ from pathlib import Path
 import time
 import numpy as np
 import mujoco
-import mujoco.viewer
 
 from quadruped_ctrl.quadruped_env import QuadrupedEnv
 from quadruped_ctrl.controllers.controller_factory import ControllerFactory
 from quadruped_ctrl.interface.reference_interface import ReferenceInterface
 from quadruped_ctrl.interface.wb_interface import WBInterface
 '''
-full stance 站立测试支撑腿
+full stance 站立测试支撑腿 + 可视化参考点、接触力等
 '''
 
 def main() -> None:
@@ -31,9 +30,8 @@ def main() -> None:
     last_action = np.zeros(env.model.nu, dtype=np.float64)
 
     print("启动 MuJoCo 可视化查看器... (MPC 原地踏步)")
-    with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
-        step = 0
-        while viewer.is_running():
+    step = 0
+    while True:
             step_start = time.time()
 
             state = env.get_state()
@@ -41,6 +39,8 @@ def main() -> None:
 
             ref_lin_vel = np.array([0.0, 0.0, 0.0], dtype=np.float64)
             ref_ang_vel = np.zeros(3, dtype=np.float64)
+            env.ref_base_lin_vel = ref_lin_vel
+            env.ref_base_ang_vel = ref_ang_vel
 
             reference_state, contact_sequence, swing_refs = ref_interface.get_reference_state(
                 current_state=state,
@@ -75,8 +75,11 @@ def main() -> None:
                 )
 
             env.step(last_action)
-            viewer.sync()
+            env.render()
+            if env.viewer is not None and not env.viewer.is_running():
+                break
 
+           
             if step % 300 == 0:
                 # 打印状态监控信息
                 num_contact = sum([state.FL.contact_state, state.FR.contact_state, 

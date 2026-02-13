@@ -12,7 +12,7 @@ import scipy
 import os 
 import copy
 
-ACADOS_INFTY = 1e2
+ACADOS_INFTY = 1e3
 class Quadruped_NMPC_Handler(BaseController):
     def __init__(self, env: QuadrupedEnv, 
                  mpc_config_path: str = "go1_mpc_config.yaml"):

@@ -11,5 +11,5 @@ geometry:
   hip_height: 0.3
 
 swing_control:
-  kp: 500
+  kp: 100
   kd: 10

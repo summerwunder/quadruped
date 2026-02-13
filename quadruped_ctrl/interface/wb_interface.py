@@ -58,12 +58,12 @@ class WBInterface:
                     force = optimal_GRF[leg_idx * 3:(leg_idx + 1) * 3]
                 else:
                     force = leg.contact_force
-                tau = -J_leg.T @ force
+                tau = - J_leg.T @ force
                 tau_total[leg_idx*3:(leg_idx+1)*3] = tau
                 
             else:
                 # ========== 摆动腿力矩 ==========
-                target = swing_targets.get(leg_name) if swing_targets else None
+                target = swing_targets.get(leg_name) 
                 tau_swing = self.compute_swing_leg_tau(leg, target)
                 tau_total[leg_idx*3:(leg_idx+1)*3] = tau_swing
         
@@ -72,25 +72,30 @@ class WBInterface:
     def compute_swing_leg_tau(self, leg, target: Optional[dict] = None) -> np.ndarray:
         """计算摆动腿力矩：通过任务空间 PD 映射到关节空间
         """
-        # 1. 统一解析目标状态 (若 target 为 None 则维持现状)
         # target: {'pos': [3,], 'vel': [3,], 'acc': [3,]}  
         target = target or {}
         d_pos = target.get('pos', leg.foot_pos)
         d_vel = target.get('vel', np.zeros(3))
         d_acc = target.get('acc', np.zeros(3))
 
-        # 2. 计算 PD 虚拟加速度/力 (Des_acc + Kp*e + Kd*edot)
-        # 这既是基础笛卡尔空间力，也是反馈线性化的核心项
         q_idx = leg.qvel_idxs
-        _J = leg.jac_pos_base[:, q_idx]
-        _J_dot = leg.jac_dot_base[:, q_idx]
-
-        acc = d_acc + self.swing_kp * (d_pos - leg.foot_pos) + self.swing_kd * (d_vel - leg.foot_vel)
-        acc = acc.reshape((3, ))
-        tau_swing = _J.T @ (self.swing_kp * (d_pos - leg.foot_pos) + self.swing_kd * (d_vel - leg.foot_vel) )
-
+        J = leg.jac_pos_base[:, q_idx]
+        J_dot = leg.jac_dot_base[:, q_idx]
+        
+        # 1. 计算笛卡尔空间目标加速度 (PD)
+        # 这里的 Kp/Kd 需要针对动态摆动调优，通常比站立时要小一点，防止撞地
+        error_pos = d_pos - leg.foot_pos
+        error_vel = d_vel - leg.foot_vel
+        v_acc = d_acc + self.swing_kp * error_pos + self.swing_kd * error_vel
+        # 3. 动力学补偿
         if self.use_feedback_linearization:
-            tau_swing = leg.mass_matrix @ np.linalg.inv(_J) @ (acc - _J_dot @ leg.qvel) + leg.qfrc_bias
-        if self.use_friction_compensation:
-            pass
+            J_inv = np.linalg.pinv(J)
+            qdd_ref = J_inv @ (v_acc - J_dot @ leg.qvel)
+            # M * qdd + b
+            # 确保 leg.mass_matrix_leg 是该腿对应的 3x3 惯量矩阵
+            tau_swing = leg.mass_matrix_leg @ qdd_ref + leg.qfrc_bias_leg
+        else:
+            # 基础雅可比转置映射 (Virtual Force)
+            force = self.swing_kp * error_pos + self.swing_kd * error_vel
+            tau_swing = J.T @ force
         return tau_swing
