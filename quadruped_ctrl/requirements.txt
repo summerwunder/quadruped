@@ -7,5 +7,7 @@ matplotlib==3.10.8
 scipy==1.15.1
 jax
 jaxlib
+cv2
+noise
 tqdm
 

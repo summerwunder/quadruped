@@ -282,21 +282,22 @@ class QuadrupedEnv(gym.Env):
             self.viewer = None
     
     def get_observation(self) -> np.ndarray:
-        """从当前状态生成观测向量
+        """从当前状态生成观测向量（用于RL/控制）
         
         Returns:
             观测向量 (obs_dim,) = 37维
-            [base_pos(3), base_quat(4), base_lin_vel(3), base_ang_vel(3), 
+            [base_pos(3, 世界坐标系), base_quat(4), 
+             base_lin_vel(3, 基座坐标系), base_ang_vel(3, 基座坐标系), 
              joint_qpos(12), joint_qvel(12)]
         """
         if self.state is None:
             return np.zeros(self.observation_space.shape, dtype=np.float32)
         
-        # 基座状态
-        base_pos = self.state.base.pos  # (3,)
+        # 基座状态（速度使用基座坐标系，更适合本体感知）
+        base_pos = self.state.base.pos  # (3,) 世界坐标系
         base_quat = self.state.base.quat  # (4,)
-        base_lin_vel = self.state.base.lin_vel  # (3,)
-        base_ang_vel = self.state.base.ang_vel  # (3,)
+        base_lin_vel = self.state.base.lin_vel  # (3,) 基座坐标系
+        base_ang_vel = self.state.base.ang_vel  # (3,) 基座坐标系
 
         joint_qpos = np.concatenate([
             self.state.FL.qpos,
