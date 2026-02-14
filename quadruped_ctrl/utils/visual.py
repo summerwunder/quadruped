@@ -104,7 +104,7 @@ def plot_swing_trajectory(
     geom_ids: Dict[str, List[int]] = None,
 ) -> Dict[str, List[int]]:
     
-    NUM_TRAJ_POINTS = 6 # 5段线 + 1个球
+    NUM_TRAJ_POINTS = 15
     legs = ["FL", "FR", "RL", "RR"]
 
     # 1. 初始化 ID (仅在第一次调用或重置时执行)
@@ -144,13 +144,5 @@ def plot_swing_trajectory(
                 geom_id=geom_ids[leg_name][i],
             )
 
-        # 5. 渲染目标球 (绿球)
-        geom_ids[leg_name][-1] = render_sphere(
-            viewer=viewer,
-            position=ref_feet_pos[leg_name],
-            diameter=0.04,
-            color=np.array([0, 1, 0, 0.5]),
-            geom_id=geom_ids[leg_name][-1],
-        )
         
     return geom_ids

@@ -189,7 +189,7 @@ class QuadrupedEnv(gym.Env):
         
         base_pos = self.state.base.pos if self.state is not None else np.zeros(3)   
         if self.show_velocity_vector:     
-            current_vel = self.state.base.lin_vel if self.state is not None else np.zeros(3)
+            current_vel = self.state.base.lin_vel_world if self.state is not None else np.zeros(3)
             ref_vel = self.ref_base_lin_vel
             
             ref_vec_id = self._geom_ids.get('ref_vel_vec', -1)
@@ -254,20 +254,20 @@ class QuadrupedEnv(gym.Env):
                             geom_id=old_geom_id
                         )
                         
-            # 🟢 NMPC优化落脚点
-            if nmpc_footholds is not None:
-                for leg_name in ['FL', 'FR', 'RL', 'RR']:
-                    nmpc_pos = nmpc_footholds.get(leg_name)
-                    if nmpc_pos is not None:
-                        geom_id_key = f'nmpc_foothold_{leg_name}'
-                        old_geom_id = self._geom_ids.get(geom_id_key, -1)
-                        self._geom_ids[geom_id_key] = render_sphere(
-                            viewer=self.viewer,
-                            position=nmpc_pos,
-                            diameter=0.025,
-                            color=np.array([0, 1, 0, 0.6]),  # 绿色，半透明
-                            geom_id=old_geom_id
-                        )
+            # # 🟢 NMPC优化落脚点
+            # if nmpc_footholds is not None:
+            #     for leg_name in ['FL', 'FR', 'RL', 'RR']:
+            #         nmpc_pos = nmpc_footholds.get(leg_name)
+            #         if nmpc_pos is not None:
+            #             geom_id_key = f'nmpc_foothold_{leg_name}'
+            #             old_geom_id = self._geom_ids.get(geom_id_key, -1)
+            #             self._geom_ids[geom_id_key] = render_sphere(
+            #                 viewer=self.viewer,
+            #                 position=nmpc_pos,
+            #                 diameter=0.025,
+            #                 color=np.array([0, 1, 0, 0.6]),  # 绿色，半透明
+            #                 geom_id=old_geom_id
+            #             )
         
         self.viewer.cam.lookat[:2] = base_pos[:2]
         self.viewer.cam.distance = 1.5
@@ -472,9 +472,11 @@ class QuadrupedEnv(gym.Env):
         self.state.base.set_from_quat(self.state.base.quat)
         
         # 速度 (freejoint: qvel[0:3]线速度, qvel[3:6]角速度)
-        self.state.base.lin_vel = self.data.qvel[0:3].copy()
-        self.state.base.ang_vel = self.data.qvel[3:6].copy()
-        
+        self.state.base.lin_vel_world = self.data.qvel[0:3].copy()
+        self.state.base.ang_vel_world = self.data.qvel[3:6].copy()
+      
+        self.state.base.lin_vel = self.state.base.rot_mat.T @ self.state.base.lin_vel_world
+        self.state.base.ang_vel = self.state.base.rot_mat.T @ self.state.base.ang_vel_world  
         # 重力向量（在基座坐标系中）
         gravity_world = np.array([0, 0, -1], dtype=np.float64)
         self.state.base.gravity_vec = self.state.base.rot_mat.T @ gravity_world
@@ -493,7 +495,6 @@ class QuadrupedEnv(gym.Env):
             leg.tau = self.data.ctrl[leg.tau_idxs].copy()
             
             # 足端位置 (需要通过正运动学计算或从site获取)
-            # 使用body位置作为足端位置
             geom_id = self.foot_geom_ids[leg_name]
             if geom_id is not None:
                 leg.foot_pos_world = self.data.geom_xpos[geom_id].copy()

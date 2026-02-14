@@ -5,7 +5,7 @@ physics:
   gravity: 9.81
   mu: 0.5
   
-verbose: false
+verbose: true
 
 optimize:
   use_feedback_linearization: true
@@ -19,8 +19,8 @@ optimize:
 
 render:
   show_velocity_vector: true
-  show_swing_trajectory: false  
-  show_footholds: true
+  show_swing_trajectory: true  
+  show_footholds: false
 gait:
   active: "trot"  # options: trot, pace, crawl, full_stance
 

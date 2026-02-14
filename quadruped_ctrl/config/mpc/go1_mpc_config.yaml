@@ -4,25 +4,25 @@ grf_min: 0.0
 
 
 weights:
-  Q_position: [0, 0, 1000]
+  Q_position: [0, 0, 1200]
   Q_velocity: [200, 200, 200]
-  Q_base_angle: [500, 500, 0]
+  Q_base_angle: [300, 300, 0]
   Q_base_angle_rates: [20, 20, 50]
-  Q_foot_pos: [300, 300, 300]
-  Q_com_position_z_integral: [10]
+  Q_foot_pos: [100, 100, 100]
+  Q_com_position_z_integral: [30]
   Q_com_velocity_integral: [10, 10, 10]
   Q_roll_integral_integral: [10]
   Q_pitch_integral_integral: [10]
 
 R:
-  R_foot_vel: [0.0001, 0.0001, 0.00001]
-  R_foot_force: [0.01, 0.01, 0.01]
+  R_foot_vel: [0.001, 0.001, 0.001]
+  R_foot_force: [0.1, 0.1, 0.1]
 
 # Solver / optimizer options
 solver:
   use_ddp: false
   use_rti: false
-  num_qp_iterations: 15
+  num_qp_iterations: 6
   as_rti_type: AS-RTI-A  # options: AS-RTI-A, AS-RTI-B, AS-RTI-C, AS-RTI-D
   solver_mode: balance   # options: balance, robust, fast, crazy_speed
   qp_solver_iter_max: 10

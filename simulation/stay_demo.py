@@ -43,7 +43,7 @@ def main() -> None:
             state = env.get_state()
             com_pos = state.base.com.copy()
 
-            ref_lin_vel = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+            ref_lin_vel = np.array([0.1, 0.0, 0.0], dtype=np.float64)
             ref_ang_vel = np.zeros(3, dtype=np.float64)
             env.ref_base_lin_vel = ref_lin_vel
             env.ref_base_ang_vel = ref_ang_vel

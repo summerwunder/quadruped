@@ -88,8 +88,8 @@ class ReferenceInterface:
         
         # 更新 gait 的 start/stop 判定
         self.gait_generator.update_start_and_stop(
-            base_lin_vel=current_state.base.lin_vel,
-            base_ang_vel=current_state.base.ang_vel,
+            base_lin_vel=current_state.base.lin_vel_world,
+            base_ang_vel=current_state.base.ang_vel_world,
             ref_lin_vel=ref_base_lin_vel,
             ref_ang_vel=ref_base_ang_vel,
             feet_dist_to_hip_max=current_state.get_max_feet_dist_to_hip(),
@@ -156,11 +156,6 @@ class ReferenceInterface:
             ref_orientation = reference_orientation,
         )
         
-        if self.env.verbose and self.env.current_step % 50 == 0:
-            print("reference_footholds:", {leg: ref_footholds[leg].tolist() for leg in ['FL', 'FR', 'RL', 'RR']})
-            print("reference_linear_velocity:", ref_base_lin_vel.tolist())
-            print("reference_angular_velocity:", ref_base_ang_vel.tolist())
-            print("reference_orientation:", reference_orientation)
         
         # 计算 swing 参考轨迹（pos, vel, acc），以供控制器/日志使用
         swing_refs = self._compute_swing_references(
