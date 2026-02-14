@@ -8,8 +8,8 @@ physics:
             -1.5544e-02, -3.1200e-05, 5.2447e-01]
 
 geometry:
-  hip_height: 0.3
+  hip_height: 0.32
 
 swing_control:
-  kp: 100
+  kp: 500
   kd: 10

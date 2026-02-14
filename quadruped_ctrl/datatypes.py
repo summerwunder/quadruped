@@ -23,18 +23,19 @@ class LegJointMap:
     # ========== 关节空间状态 ==========
     qpos: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))    # 关节角度 [rad]
     qvel: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))    # 关节角速度 [rad/s]
+    
     tau: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))     # 控制力矩 [N·m]
     
     # ========== 笛卡尔空间状态 (基座坐标系) ==========
     foot_pos: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))      # 足端相对于基座的位置 [m]
     foot_vel: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))      # 足端相对于基座的速度 [m/s]
-    foot_acc: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))      # 足端加速度 [m/s²]
-    
+ 
     hip_pos: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))       # 髋关节相对于基座的位置 [m]
     
     # ========== 笛卡尔空间状态 (世界坐标系) ==========
     foot_pos_world: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64)) # 足端在世界系下的位置 [m]
     foot_vel_world: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64)) # 足端在世界系下的速度 [m/s]
+    
     foot_pos_centered: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))  # 足端相对于质心的位置 [m]
     hip_pos_world: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))  # 髋关节在世界系下的位置 [m]
     

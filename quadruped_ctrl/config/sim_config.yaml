@@ -8,8 +8,7 @@ physics:
 verbose: false
 
 optimize:
-  use_feedback_linearization: false
-  use_friction_compensation: false
+  use_feedback_linearization: true
   use_foothold_optimization: false
 
   use_foothold_constraint: true
@@ -18,9 +17,12 @@ optimize:
 
   use_warm_start: true
 
-
+render:
+  show_velocity_vector: true
+  show_swing_trajectory: false  
+  show_footholds: true
 gait:
-  active: "full_stance"  # options: trot, pace, crawl, full_stance
+  active: "trot"  # options: trot, pace, crawl, full_stance
 
   gaits:
     trot:

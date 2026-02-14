@@ -95,13 +95,12 @@ def render_vector(viewer, vector, pos, scale=1.0, color=None, geom_id=-1):
 
 def plot_swing_trajectory(
     viewer: Handle,
-    swing_traj_controller,
+    swing_generator,
     swing_period: float,
     swing_time: Dict[str, float],
     lift_off_positions: Dict[str, np.ndarray],
     nmpc_footholds: Dict[str, np.ndarray],
     ref_feet_pos: Dict[str, np.ndarray],
-    early_stance_detector,
     geom_ids: Dict[str, List[int]] = None,
 ) -> Dict[str, List[int]]:
     
@@ -116,11 +115,12 @@ def plot_swing_trajectory(
         return geom_ids
 
     for leg_name in legs:
-        # 2. 如果当前腿不在摆动，把之前的几何体“藏”起来 (设为全透明)
+        # 2. 如果当前腿不在摆动，把之前的几何体“藏”起来并清空 ID
         if swing_time.get(leg_name, 0.0) == 0.0:
             for g_id in geom_ids[leg_name]:
                 if g_id != -1:
-                    viewer.user_scn.geoms[g_id].rgba[3] = 0.0 
+                    viewer.user_scn.geoms[g_id].rgba[3] = 0.0
+            geom_ids[leg_name] = [-1] * NUM_TRAJ_POINTS
             continue
             
         # 3. 计算轨迹点
@@ -128,9 +128,8 @@ def plot_swing_trajectory(
         # 计算从当前时刻到摆动结束的预测路径
         times = np.linspace(swing_time[leg_name], swing_period, NUM_TRAJ_POINTS)
         for t in times:
-            ref_foot_pos, _, _ = swing_traj_controller.swing_generator.compute_trajectory_references(
-                t, lift_off_positions[leg_name], nmpc_footholds[leg_name], 
-                early_stance_detector.hitmoments[leg_name], early_stance_detector.hitpoints[leg_name]
+            ref_foot_pos, _, _ = swing_generator.get_swing_reference_trajectory(
+                t, lift_off_positions[leg_name], nmpc_footholds[leg_name]
             )
             traj_points.append(ref_foot_pos.squeeze())
 

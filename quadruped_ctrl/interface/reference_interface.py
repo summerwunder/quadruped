@@ -37,7 +37,7 @@ class ReferenceInterface:
         )
         
         # 初始化摇摆轨迹生成器
-        swing_height = self.robot.step_height
+        swing_height = self.robot.step_height 
         step_freq = float(self.gait_generator.step_freq)
         swing_duration = (1 - self.gait_generator.duty_factor) * (1 / step_freq)
         stance_time = (1 / step_freq) * self.gait_generator.duty_factor
@@ -101,6 +101,10 @@ class ReferenceInterface:
             self.contact_sequence_dts, 
             is_full_stance=self.is_full_stance
         )
+        
+        # 更新足端接触状态跟踪
+        current_contact = self.gait_generator.get_contact_at_time(abs_time)
+        self.foothold_generator.update_contact_states(current_state, current_contact)
 
         # Adjust reference velocity based on terrain estimation BEFORE foothold computation
         terrain_roll, terrain_pitch, terrain_height, robot_height = self.terrain_estimator.update(current_state)
@@ -117,9 +121,10 @@ class ReferenceInterface:
             current_state,
             ref_lin_w
         )
-        
+
         ref_pos = np.array([0, 0, self.robot.hip_height])
         ref_pos[2] -= current_state.base.pos[2] - com_pos[2]
+        
         
         # TODO: only test velocity tracking on flat terrain
         # ref_pos = current_state.base.pos.copy()
@@ -197,18 +202,26 @@ class ReferenceInterface:
                     self.swing_time[i] += dt
             else:  # 支撑相
                 self.swing_time[i] = 0.0
-            
-            # 只计算第一个时间步 (k=0)
+        
             if seq[0] == 0:
-                # 摆动相：使用当前 swing_time 计算轨迹
-                lift_off_pos = np.asarray(leg.foot_pos, dtype=np.float64).copy()
-                touch_down = np.asarray(foothold_targets[leg_name], dtype=np.float64)
+                lift_off_world = self.foothold_generator.lift_off_positions[leg_name]
+                if np.allclose(lift_off_world, 0.0):
+                    lift_off_world = leg.foot_pos_world.copy()
+                touch_down_world = np.asarray(foothold_targets[leg_name], dtype=np.float64)
+                
+                # 转换为基座坐标系
+                base_pos = current_state.base.pos
+                base_rot = current_state.base.rot_mat
+                lift_off_pos = base_rot.T @ (lift_off_world - base_pos)
+                touch_down = base_rot.T @ (touch_down_world - base_pos)
+                
                 t_swing = min(self.swing_time[i], self.swing_period)  
                 p, v, a = self.swing_generator.get_swing_reference_trajectory(t_swing, lift_off_pos, touch_down)
+                
             else:
                 # 支撑相：脚保持当前位置
                 p = np.asarray(leg.foot_pos, dtype=np.float64).copy()
-                v = np.zeros(3, dtype=np.float64)
+                v = np.asarray(leg.foot_vel, dtype=np.float64).copy()
                 a = np.zeros(3, dtype=np.float64)     
             results[leg_name] = {'pos': p, 'vel': v, 'acc': a}
 

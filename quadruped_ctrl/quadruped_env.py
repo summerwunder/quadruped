@@ -11,7 +11,8 @@ import mujoco
 import gymnasium as gym
 from gymnasium import spaces
 from typing import Dict, Tuple, Optional, Any
-from .utils.visual import render_sphere, render_line, render_vector
+from .planning.swing_trajectory_generator import SwingTrajectoryGenerator
+from .utils.visual import plot_swing_trajectory, render_vector, render_sphere
 from .datatypes import QuadrupedState, RobotConfig, Trajectory, LegJointMap, BaseState
 from .utils.config_loader import ConfigLoader
 
@@ -45,6 +46,10 @@ class QuadrupedEnv(gym.Env):
             module_dir = os.path.dirname(__file__)
             model_path = os.path.join(module_dir, 'assets', 'robot', 'go1', 'scene.xml')
         
+        self.show_velocity_vector = self.sim_config.get('render', {}).get('show_velocity_vector', False)
+        self.show_swing_trajectory = self.sim_config.get('render', {}).get('show_swing_trajectory', False)
+        self.show_footholds = self.sim_config.get('render', {}).get('show_footholds', False)
+        
         self.verbose = self.sim_config.get('verbose', False)
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
@@ -63,6 +68,7 @@ class QuadrupedEnv(gym.Env):
         
         # Store the ids of visual aid geometries
         self._geom_ids = {}
+        self._swing_geom_ids = None
         
         n_dof = self.robot.get_total_dof()  # 12 (3 DOF per leg * 4 legs) 
         # 观测空间：基座(13) + 每条腿关节状态(3*3+3*3+3*3=27) = 40维
@@ -101,10 +107,14 @@ class QuadrupedEnv(gym.Env):
             init_qpos = self.model.key_qpos[0].copy() 
         else:
             init_qpos = np.zeros(self.model.nq, dtype=np.float64)
+            
+
         for leg_name in ['FL', 'FR', 'RL', 'RR']:
             qpos_idxs = self.joint_idx_map[leg_name]['qpos_idxs']
             self.data.qpos[qpos_idxs] = init_qpos[qpos_idxs]
-        self.data.qpos[:7] = init_qpos[:7]
+            
+        self.data.qpos[0:2] = np.array([0.0, 0.0])
+        self.data.qpos[2] = self.robot.hip_height
         
         mujoco.mj_forward(self.model, self.data)
 
@@ -155,11 +165,12 @@ class QuadrupedEnv(gym.Env):
         
         return obs, reward, terminated, truncated, info
     
-    def render(self, mode: str = 'human') -> Optional[Any]:
+    def render(self, mode: str = 'human', swing_vis: Optional[Dict[str, Any]] = None) -> Optional[Any]:
         """渲染环境
         
         Args:
             mode: 渲染模式
+            swing_vis: 摆动轨迹可视化数据字典
         """
         if self.viewer is None and mode == 'human':
             self.viewer = mujoco.viewer.launch_passive(
@@ -175,31 +186,89 @@ class QuadrupedEnv(gym.Env):
             
         if self.viewer is None:
             return None
-        # 当前速度
-        base_pos = self.state.base.pos if self.state is not None else np.zeros(3)   
-        current_vel = self.state.base.lin_vel if self.state is not None else np.zeros(3)
-        ref_vel = self.ref_base_lin_vel
         
-        ref_vec_id = self._geom_ids.get('ref_vel_vec', -1)
-        self._geom_ids['ref_vel_vec'] = render_vector(
-            viewer=self.viewer,
-            vector=ref_vel,
-            pos=base_pos + np.array([0, 0, 0.1]),  
-            scale=np.linalg.norm(ref_vel) + 1e-3,  
-            color=np.array([1, 0, 0, 0.8]),      
-            geom_id=ref_vec_id
-        )
-        curr_vec_id = self._geom_ids.get('curr_vel_vec', -1)
-        # 4. 渲染实际速度箭头 (青色)
-        curr_vec_id = self._geom_ids.get('curr_vel_vec', -1)
-        self._geom_ids['curr_vel_vec'] = render_vector(
-            viewer=self.viewer,
-            vector=current_vel,
-            pos=base_pos + np.array([0, 0, 0.2]), 
-            scale=np.linalg.norm(current_vel) + 1e-3,
-            color=np.array([0, 1, 1, 0.8]),       
-            geom_id=curr_vec_id
-        )
+        base_pos = self.state.base.pos if self.state is not None else np.zeros(3)   
+        if self.show_velocity_vector:     
+            current_vel = self.state.base.lin_vel if self.state is not None else np.zeros(3)
+            ref_vel = self.ref_base_lin_vel
+            
+            ref_vec_id = self._geom_ids.get('ref_vel_vec', -1)
+            self._geom_ids['ref_vel_vec'] = render_vector(
+                viewer=self.viewer,
+                vector=ref_vel,
+                pos=base_pos + np.array([0, 0, 0.1]),  
+                scale=np.linalg.norm(ref_vel) + 1e-3,  
+                color=np.array([1, 0, 0, 0.8]),      
+                geom_id=ref_vec_id
+            )
+            curr_vec_id = self._geom_ids.get('curr_vel_vec', -1)
+            # 4. 渲染实际速度箭头 (青色)
+            curr_vec_id = self._geom_ids.get('curr_vel_vec', -1)
+            self._geom_ids['curr_vel_vec'] = render_vector(
+                viewer=self.viewer,
+                vector=current_vel,
+                pos=base_pos + np.array([0, 0, 0.2]), 
+                scale=np.linalg.norm(current_vel) + 1e-3,
+                color=np.array([0, 1, 1, 0.8]),       
+                geom_id=curr_vec_id
+            )
+        
+        if self.show_swing_trajectory and swing_vis is not None:
+            swing_generator = swing_vis.get('swing_generator')
+            swing_period = swing_vis.get('swing_period')
+            swing_time = swing_vis.get('swing_time')
+            lift_off_positions = swing_vis.get('lift_off_positions')
+            nmpc_footholds = swing_vis.get('nmpc_footholds')
+            ref_feet_pos = swing_vis.get('ref_feet_pos')
+            
+            if all([swing_generator, swing_period, swing_time, lift_off_positions, nmpc_footholds, ref_feet_pos]):
+                self._swing_geom_ids = plot_swing_trajectory(
+                    viewer=self.viewer,
+                    swing_generator=swing_generator,
+                    swing_period=swing_period,
+                    swing_time=swing_time,
+                    lift_off_positions=lift_off_positions,
+                    nmpc_footholds=nmpc_footholds,
+                    ref_feet_pos=ref_feet_pos,
+                    geom_ids=self._swing_geom_ids,
+                )
+        
+        # 渲染落脚点（NMPC优化结果 vs 参考落脚点）
+        if self.show_footholds and swing_vis is not None:
+            nmpc_footholds = swing_vis.get('nmpc_footholds')
+            ref_feet_pos = swing_vis.get('ref_feet_pos')
+            
+            
+            # 🔵 参考落脚点
+            if ref_feet_pos is not None:
+                for leg_name in ['FL', 'FR', 'RL', 'RR']:
+                    ref_pos = ref_feet_pos.get(leg_name)
+                    if ref_pos is not None:
+                        geom_id_key = f'ref_foothold_{leg_name}'
+                        old_geom_id = self._geom_ids.get(geom_id_key, -1)
+                        self._geom_ids[geom_id_key] = render_sphere(
+                            viewer=self.viewer,
+                            position=ref_pos,
+                            diameter=0.025,
+                            color=np.array([0, 0, 1, 0.6]),  # 蓝色，半透明
+                            geom_id=old_geom_id
+                        )
+                        
+            # 🟢 NMPC优化落脚点
+            if nmpc_footholds is not None:
+                for leg_name in ['FL', 'FR', 'RL', 'RR']:
+                    nmpc_pos = nmpc_footholds.get(leg_name)
+                    if nmpc_pos is not None:
+                        geom_id_key = f'nmpc_foothold_{leg_name}'
+                        old_geom_id = self._geom_ids.get(geom_id_key, -1)
+                        self._geom_ids[geom_id_key] = render_sphere(
+                            viewer=self.viewer,
+                            position=nmpc_pos,
+                            diameter=0.025,
+                            color=np.array([0, 1, 0, 0.6]),  # 绿色，半透明
+                            geom_id=old_geom_id
+                        )
+        
         self.viewer.cam.lookat[:2] = base_pos[:2]
         self.viewer.cam.distance = 1.5
         self.viewer.sync()
@@ -433,13 +502,11 @@ class QuadrupedEnv(gym.Env):
                 # 使用calf body位置
                 body_id = self.foot_body_ids[leg_name]
                 leg.foot_pos_world = self.data.xpos[body_id].copy()
-            
             # 转换到基座坐标系
             base_pos = self.state.base.pos
             base_rot = self.state.base.rot_mat
             leg.foot_pos_centered = leg.foot_pos_world - base_pos
             leg.foot_pos = base_rot.T @ (leg.foot_pos_world - base_pos)
-
             # 髋关节位置：优先使用 hip_body_ids 获取世界坐标位置，并转换到基座坐标系
             hip_body_id = None
             if hasattr(self, 'hip_body_ids'):
@@ -454,6 +521,10 @@ class QuadrupedEnv(gym.Env):
             
             # 计算 Jacobian 矩阵
             self._compute_leg_jacobian(leg_name)
+            
+            J = leg.jac_pos_base[:, leg.qvel_idxs]      # (3x3)
+            leg.foot_vel = J @ leg.qvel
+            leg.foot_vel_world = base_rot @ leg.foot_vel
         
         # 更新全局状态数组
         self.state.qpos = self.data.qpos.copy()

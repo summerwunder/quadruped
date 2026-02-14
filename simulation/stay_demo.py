@@ -28,6 +28,12 @@ def main() -> None:
     mpc_decimation = int(env.sim_config.get("physics", {}).get("mpc_frequency", 10))
     mpc_decimation = max(1, mpc_decimation)
     last_action = np.zeros(env.model.nu, dtype=np.float64)
+    last_optimal_footholds = {
+        "FL": np.zeros(3, dtype=np.float64),
+        "FR": np.zeros(3, dtype=np.float64),
+        "RL": np.zeros(3, dtype=np.float64),
+        "RR": np.zeros(3, dtype=np.float64),
+    }
 
     print("启动 MuJoCo 可视化查看器... (MPC 原地踏步)")
     step = 0
@@ -61,6 +67,12 @@ def main() -> None:
                     inertia = env.robot.inertia,
                     mu = env.mu
                 )   
+                last_optimal_footholds = {
+                    "FL": optimal_footholds[0].copy(),
+                    "FR": optimal_footholds[1].copy(),
+                    "RL": optimal_footholds[2].copy(),
+                    "RR": optimal_footholds[3].copy(),
+                }
                 # 将 GRF 写入 state（供 WBInterface 使用）
                 for i, leg_name in enumerate(['FL', 'FR', 'RL', 'RR']):
                     leg = state.get_leg_by_name(leg_name)
@@ -75,7 +87,27 @@ def main() -> None:
                 )
 
             env.step(last_action)
-            env.render()
+            
+            # 从 FootholdGenerator 获取准确的抬脚点（由 update_contact_states 自动维护）
+            swing_vis = {
+                "swing_generator": ref_interface.swing_generator,
+                "swing_period": ref_interface.swing_period,
+                "swing_time": {
+                    "FL": ref_interface.swing_time[0],
+                    "FR": ref_interface.swing_time[1],
+                    "RL": ref_interface.swing_time[2],
+                    "RR": ref_interface.swing_time[3],
+                },
+                "lift_off_positions": ref_interface.foothold_generator.lift_off_positions,
+                "nmpc_footholds": last_optimal_footholds,
+                "ref_feet_pos": {
+                    "FL": reference_state.ref_foot_FL.copy(),
+                    "FR": reference_state.ref_foot_FR.copy(),
+                    "RL": reference_state.ref_foot_RL.copy(),
+                    "RR": reference_state.ref_foot_RR.copy(),
+                },
+            }
+            env.render(swing_vis=swing_vis)
             if env.viewer is not None and not env.viewer.is_running():
                 break
 
@@ -98,10 +130,10 @@ def main() -> None:
                 print(f"    ref_orient: {np.array2string(np.asarray(reference_state.ref_orientation), precision=3)}")
                 print(f"    ref_ang_vel: {np.array2string(np.asarray(reference_state.ref_angular_velocity), precision=3)}")
                 print("  足端参考/当前:")
-                print(f"    FL ref: {np.array2string(reference_state.ref_foot_FL, precision=3)}, cur: {np.array2string(state.FL.foot_pos, precision=3)}")
-                print(f"    FR ref: {np.array2string(reference_state.ref_foot_FR, precision=3)}, cur: {np.array2string(state.FR.foot_pos, precision=3)}")
-                print(f"    RL ref: {np.array2string(reference_state.ref_foot_RL, precision=3)}, cur: {np.array2string(state.RL.foot_pos, precision=3)}")
-                print(f"    RR ref: {np.array2string(reference_state.ref_foot_RR, precision=3)}, cur: {np.array2string(state.RR.foot_pos, precision=3)}")
+                print(f"    FL ref: {np.array2string(reference_state.ref_foot_FL, precision=3)}, cur: {np.array2string(state.FL.foot_pos_world, precision=3)}")
+                print(f"    FR ref: {np.array2string(reference_state.ref_foot_FR, precision=3)}, cur: {np.array2string(state.FR.foot_pos_world, precision=3)}")
+                print(f"    RL ref: {np.array2string(reference_state.ref_foot_RL, precision=3)}, cur: {np.array2string(state.RL.foot_pos_world, precision=3)}")
+                print(f"    RR ref: {np.array2string(reference_state.ref_foot_RR, precision=3)}, cur: {np.array2string(state.RR.foot_pos_world, precision=3)}")
                 print(f"  contact_sequence[0]: {contact_sequence[:, 0]}")
 
             step += 1
