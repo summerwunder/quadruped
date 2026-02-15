@@ -121,7 +121,7 @@ class ReferenceInterface:
             current_state,
             ref_lin_w
         )
-
+        # TODO: ref_pos暂时写死未考虑实际位置
         ref_pos = np.array([0, 0, self.robot.hip_height])
         ref_pos[2] -= current_state.base.pos[2] - com_pos[2]
         

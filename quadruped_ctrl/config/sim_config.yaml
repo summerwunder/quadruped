@@ -1,6 +1,6 @@
 physics:
   dt: 0.002                # 500Hz
-  mpc_frequency: 15        # 50Hz
+  mpc_frequency: 80       
   scene: "flat"            # flat, random_boxes, perlin
   gravity: 9.81
   mu: 0.5
@@ -18,7 +18,7 @@ optimize:
   use_warm_start: true
 
 ik_solver:
-  use_ik: true
+  use_ik: false
   ik_iterations: 20
   ik_dt: 0.01
   ik_damping: 0.001
@@ -26,8 +26,9 @@ ik_solver:
   max_vel_diff: 5
 
 render:
+  render_frequency: 30
   show_velocity_vector: true
-  show_swing_trajectory: true  
+  show_swing_trajectory: false  
   show_footholds: false
 
 gait:
