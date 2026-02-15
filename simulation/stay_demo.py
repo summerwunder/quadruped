@@ -79,12 +79,13 @@ def main() -> None:
                     leg.contact_force = optimal_GRF[i*3:(i+1)*3].copy()
                 
                 # 使用 WBInterface 将 GRF 转换为关节力矩
-                last_action = wb_interface.compute_tau(
+                tau_total, des_joints_pos, des_joints_vel = wb_interface.compute_tau(
                     state,
                     swing_targets=swing_refs,
                     contact_sequence=contact_sequence[:, 0],
                     optimal_GRF=optimal_GRF
                 )
+                last_action = tau_total
 
             env.step(last_action)
             

@@ -17,10 +17,19 @@ optimize:
 
   use_warm_start: true
 
+ik_solver:
+  use_ik: true
+  ik_iterations: 20
+  ik_dt: 0.01
+  ik_damping: 1e-3
+  max_pos_diff: 2
+  max_vel_diff: 5
+
 render:
   show_velocity_vector: true
   show_swing_trajectory: true  
   show_footholds: false
+
 gait:
   active: "trot"  # options: trot, pace, crawl, full_stance
 

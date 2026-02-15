@@ -1,7 +1,7 @@
 from quadruped_ctrl.datatypes import QuadrupedState
 import numpy as np
 from typing import Optional
-
+from quadruped_ctrl.utils.inverse_kinematics import InverseKinematics
 
 class WBInterface:
     """Whole-Body 控制接口基类
@@ -13,13 +13,23 @@ class WBInterface:
     def __init__(self, env):
         self.env = env
         
+        # IK求解器配置
+        ik_config = env.sim_config.get('ik_solver', {})
+        self.use_ik = ik_config.get('use_ik', True)
+        self.ik_solver = InverseKinematics(
+            env,
+            ik_iterations=ik_config.get('ik_iterations'),
+            ik_dt=ik_config.get('ik_dt'),
+            damping=ik_config.get('ik_damping')
+        )
+        self.max_pos_diff = ik_config.get('max_pos_diff', 2.0)  
+        self.max_vel_diff = ik_config.get('max_vel_diff', 5.0)  
         # 从环境的 robot 获取摆动腿 PD 参数
-        # 这些参数来自 quadruped_env 加载的 robot_config 配置
-        self.swing_kp = env.robot.swing_kp
-        self.swing_kd = env.robot.swing_kd
-        
-        optimize = env.sim_config.get('optimize', {})
-        self.use_feedback_linearization = optimize.get('use_feedback_linearization', False)
+        self.swing_kp = self.env.robot.swing_kp
+        self.swing_kd = self.env.robot.swing_kd
+
+ 
+        self.use_feedback_linearization = env.sim_config.get('optimize', {}).get('use_feedback_linearization', False)
     def compute_tau(self, state: QuadrupedState,
                     swing_targets: Optional[dict] = None,
                     contact_sequence: Optional[np.ndarray] = None,
@@ -36,6 +46,8 @@ class WBInterface:
             控制力矩 (12,) - [FL(3), FR(3), RL(3), RR(3)]
         """
         tau_total = np.zeros(12)
+        des_foot_pos = {}
+        des_foot_vel = {}
         
         for leg_idx, leg_name in enumerate(['FL', 'FR', 'RL', 'RR']):
             leg = getattr(state, leg_name) 
@@ -45,12 +57,13 @@ class WBInterface:
             if isinstance(planned_contact, (np.ndarray, list)):
                 planned_contact = planned_contact[0]
             is_stance = bool(planned_contact)
-
+            target = swing_targets.get(leg_name) 
             if is_stance:
                 # ========== 支撑腿力矩 ==========
+                des_foot_pos[leg_name] = leg.foot_pos_world.copy()
+                des_foot_vel[leg_name] = leg.foot_vel_world.copy()
                 # τ = J^T · F (雅可比转置映射接触力)
-                q_idx = leg.qvel_idxs 
-                J_leg = leg.jac_pos_world[:, q_idx]  # (3, 3) - 只提取该腿3个关节的列
+                J_leg = leg.jac_pos_world[:, leg.qvel_idxs]  # (3, 3) - 只提取该腿3个关节的列
                 if optimal_GRF is not None:
                     force = optimal_GRF[leg_idx * 3:(leg_idx + 1) * 3]
                 else:
@@ -59,12 +72,35 @@ class WBInterface:
                 tau_total[leg_idx*3:(leg_idx+1)*3] = tau
                 
             else:
+                des_foot_pos[leg_name] = target['pos'] if target else leg.foot_pos_world.copy()
+                des_foot_vel[leg_name] = target['vel'] if target else leg.foot_vel_world.copy()
                 # ========== 摆动腿力矩 ==========
                 target = swing_targets.get(leg_name) 
                 tau_swing = self.compute_swing_leg_tau(leg, target)
                 tau_total[leg_idx*3:(leg_idx+1)*3] = tau_swing
         
-        return tau_total
+        if self.use_ik:
+            q_solution = self.ik_solver.compute_ik(des_foot_pos)
+        else:
+            q_solution = self.env.data.qpos.copy()
+        
+        des_joints_pos = {}
+        des_joints_vel = {}
+        for leg_idx, leg_name in enumerate(['FL', 'FR', 'RL', 'RR']):
+            leg = state.get_leg_by_name(leg_name)
+            des_joints_pos[leg_name] = q_solution[leg.qpos_idxs]
+            J_leg = leg.jac_pos_world[:, leg.qvel_idxs]  # (3, 3)
+            des_joints_vel[leg_name] = np.linalg.pinv(J_leg) @ des_foot_vel[leg_name]
+          
+        for leg_idx, leg_name in enumerate(['FL', 'FR', 'RL', 'RR']):
+            leg = state.get_leg_by_name(leg_name)
+            pos_diff = des_joints_pos[leg_name] - leg.qpos
+            vel_diff = des_joints_vel[leg_name] - leg.qvel
+            
+            des_joints_pos[leg_name] = leg.qpos + np.clip(pos_diff, -self.max_pos_diff, self.max_pos_diff)
+            des_joints_vel[leg_name] = leg.qvel + np.clip(vel_diff, -self.max_vel_diff, self.max_vel_diff)
+            
+        return tau_total, des_joints_pos, des_joints_vel
     
     def compute_swing_leg_tau(self, leg, target: Optional[dict] = None) -> np.ndarray:
         """计算摆动腿力矩：通过任务空间 PD 映射到关节空间
