@@ -1,6 +1,6 @@
 physics:
   dt: 0.002                # 500Hz
-  mpc_frequency: 10        # 50Hz
+  mpc_frequency: 15        # 50Hz
   scene: "flat"            # flat, random_boxes, perlin
   gravity: 9.81
   mu: 0.5
@@ -21,7 +21,7 @@ ik_solver:
   use_ik: true
   ik_iterations: 20
   ik_dt: 0.01
-  ik_damping: 1e-3
+  ik_damping: 0.001
   max_pos_diff: 2
   max_vel_diff: 5
 
@@ -35,14 +35,12 @@ gait:
 
   gaits:
     trot:
-      type: 1 
       duty_factor: 0.6
       step_freq: 1.4
       margin: 0.04
       phase_offsets: [0.5, 1.0, 1.0, 0.5] # FL, FR, RL, RR
     
     pace:
-      type: 3 
       duty_factor: 0.7
       step_freq: 1.4
       margin: 0.1
@@ -55,14 +53,12 @@ gait:
     #   phase_offsets: [0.5, 0.5, 0.0, 0.0]
 
     crawl:
-      type: 2 
       duty_factor: 0.8
       step_freq: 0.5
       margin: 0.02
       phase_offsets: [0.0, 0.5, 0.75, 0.25]
 
-    full_stance:
-      type: 5 
-      duty_factor: 0.65
+    full_stance: 
+      duty_factor: 0.6
       step_freq: 2.0
       phase_offsets: [0.0, 0.0, 0.0, 0.0]
